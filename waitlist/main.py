@@ -5,6 +5,7 @@ import motor.motor_asyncio
 from urllib.parse import quote_plus
 from app.models import Creator, Business
 from typing import Union
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 MONGO_USERNAME = quote_plus(os.getenv("MONGO_USERNAME"))
@@ -16,6 +17,14 @@ MONGO_URI = f"mongodb+srv://{MONGO_USERNAME}:{MONGO_PASSWORD}@waitlist.gdshkuo.m
 app = FastAPI()
 client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
 db = client[MONGO_DB_NAME]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.post("/register")
 async def register_user(user: Union[Creator, Business]):
