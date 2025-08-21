@@ -5,7 +5,7 @@ asyncpg
 pydantic
 python-dotenv
 passlib[bcrypt]
-psycopg2-binary
+asyncpg
 python-jose[cryptography]
 google-auth
 email-validator
