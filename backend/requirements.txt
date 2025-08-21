@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sqlalchemy>=1.4
+asyncpg
+pydantic
+python-dotenv
+passlib[bcrypt]
+python-jose[cryptography]
+google-auth
+email-validator
+requests
