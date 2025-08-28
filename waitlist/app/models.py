@@ -20,10 +20,10 @@ class UserBase(BaseModel):
     phone: str
     is_creator: bool
 
-class Creator(UserBase):
+class CreatorSignUp(UserBase):
     is_creator: bool = True
     socials: Dict[str, str] 
 
-class Business(UserBase):
+class BusinessSignUp(UserBase):
     is_creator: bool = False
     category: str 
