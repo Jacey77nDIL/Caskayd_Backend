@@ -88,7 +88,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     
 
 @app.post("/auth/facebook")
-def exchange_token(request: Request):
+async def exchange_token(request: Request):
     data = await request.json()
     code = data.get("code")
 
