@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import Base, get_db, engine
@@ -17,6 +17,7 @@ from models import UserCreator
 from sqlalchemy.future import select
 from passlib.context import CryptContext
 import logging
+import requests
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -26,6 +27,9 @@ app = FastAPI()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
+FB_APP_ID = os.getenv("FB_APP_ID")
+FB_APP_SECRET = os.getenv("FB_APP_SECRET")
+REDIRECT_URI = "https://caskayd-application.vercel.app/auth/callback/facebook"
 
 app.add_middleware(
     CORSMiddleware,
@@ -82,6 +86,39 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
     
+
+@app.post("/auth/facebook")
+def exchange_token(request: Request):
+    data = await request.json()
+    code = data.get("code")
+
+    # Exchange code for short-lived token
+    token_url = "https://graph.facebook.com/v19.0/oauth/access_token"
+    params = {
+        "client_id": FB_APP_ID,
+        "client_secret": FB_APP_SECRET,
+        "redirect_uri": REDIRECT_URI,
+        "code": code,
+    }
+    res = requests.get(token_url, params=params).json()
+    short_lived_token = res.get("access_token")
+
+    if not short_lived_token:
+        return {"error": "Failed to get short-lived token", "details": res}
+
+    # Exchange for long-lived token
+    long_token_url = "https://graph.facebook.com/v19.0/oauth/access_token"
+    params = {
+        "grant_type": "fb_exchange_token",
+        "client_id": FB_APP_ID,
+        "client_secret": FB_APP_SECRET,
+        "fb_exchange_token": short_lived_token,
+    }
+    res = requests.get(long_token_url, params=params).json()
+    long_lived_token = res.get("access_token")
+
+    return {"long_lived_token": long_lived_token}
+
 
 @app.get("/chat/creators", response_model=List[dict])
 async def get_creators(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):

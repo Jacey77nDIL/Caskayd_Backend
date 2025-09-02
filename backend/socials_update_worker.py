@@ -1,0 +1,1 @@
+# Update the socials insights of any creator that reaches 7 days
