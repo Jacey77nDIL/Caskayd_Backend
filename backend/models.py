@@ -73,7 +73,7 @@ class InstagramCreatorSocial(Base):
     __tablename__ = "instagram_creator_socials"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(BigInteger, ForeignKey("users_creators.id", ondelete="CASCADE"), nullable=False)
 
     platform = Column(String(32), nullable=False, default="instagram")  # 'instagram'
     facebook_page_id = Column(String(64))            # connected page id
