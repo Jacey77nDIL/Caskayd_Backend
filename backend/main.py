@@ -16,7 +16,7 @@ from sqlalchemy.orm import selectinload
 from models import UserCreator
 from sqlalchemy.future import select
 from passlib.context import CryptContext
-from instagram_creator_socials import Base, InstagramCreatorSocial, exchange_token_and_upsert_insights
+from instagram_creator_socials import InstagramCreatorSocial, exchange_token_and_upsert_insights
 import logging
 import requests
 
