@@ -10,3 +10,4 @@ python-jose[cryptography]
 google-auth
 email-validator
 requests
+PyJWT
