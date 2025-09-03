@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import Base, get_db, engine
@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from models import UserCreator
 from sqlalchemy.future import select
 from passlib.context import CryptContext
+from instagram_creator_socials import Base, InstagramCreatorSocial, exchange_token_and_upsert_insights
 import logging
 import requests
 
@@ -88,36 +89,28 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     
 
 @app.post("/auth/facebook")
-async def exchange_token(request: Request):
-    data = await request.json()
-    code = data.get("code")
+async def facebook_auth(
+    request: Request,
+    authorization: str = Header(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Body: { "code": "<facebook_code>" }
+    Header: Authorization: Bearer <your_user_jwt>
+    """
+    body = await request.json()
+    code = body.get("code")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing 'code' in body.")
 
-    # Exchange code for short-lived token
-    token_url = "https://graph.facebook.com/v19.0/oauth/access_token"
-    params = {
-        "client_id": FB_APP_ID,
-        "client_secret": FB_APP_SECRET,
-        "redirect_uri": REDIRECT_URI,
-        "code": code,
-    }
-    res = requests.get(token_url, params=params).json()
-    short_lived_token = res.get("access_token")
-
-    if not short_lived_token:
-        return {"error": "Failed to get short-lived token", "details": res}
-
-    # Exchange for long-lived token
-    long_token_url = "https://graph.facebook.com/v19.0/oauth/access_token"
-    params = {
-        "grant_type": "fb_exchange_token",
-        "client_id": FB_APP_ID,
-        "client_secret": FB_APP_SECRET,
-        "fb_exchange_token": short_lived_token,
-    }
-    res = requests.get(long_token_url, params=params).json()
-    long_lived_token = res.get("access_token")
-
-    return {"long_lived_token": long_lived_token}
+    try:
+        result = exchange_token_and_upsert_insights(db, code, authorization)
+        return {"status": "ok", "data": result}
+    except ValueError as ve:
+        raise HTTPException(status_code=401, detail=str(ve))
+    except Exception as e:
+        # Optional: log e
+        raise HTTPException(status_code=500, detail=f"Auth/Insights failed: {e}")
 
 
 @app.get("/chat/creators", response_model=List[dict])

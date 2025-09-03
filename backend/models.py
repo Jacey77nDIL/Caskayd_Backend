@@ -5,6 +5,7 @@ from sqlalchemy.sql import func
 from typing import Optional, List
 from datetime import datetime
 from database import Base
+from instagram_creator_socials import CreatorSocial
 
 # Pydantic models (for API requests/responses)
 class CreatorSignUp(BaseModel):
@@ -46,6 +47,8 @@ class UserCreator(Base):
     
     # Relationships
     conversations = relationship("Conversation", foreign_keys="Conversation.creator_id", back_populates="creator")
+    # 👇 Add this to connect to CreatorSocial
+    socials = relationship("CreatorSocial", back_populates="user", cascade="all, delete")
 
 class UserBusiness(Base):
     __tablename__ = "users_businesses"
