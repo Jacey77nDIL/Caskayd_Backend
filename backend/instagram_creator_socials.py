@@ -12,7 +12,7 @@ from sqlalchemy import (
     UniqueConstraint, Text, func, select, and_, update
 )
 from sqlalchemy.orm import declarative_base, relationship, Session
-from models import UserCreator
+from models import InstagramCreatorSocial
 
 # ---------------------------
 # Settings / Env
@@ -26,47 +26,6 @@ JWT_SECRET = os.getenv("SECRET_KEY")  # used if algorithm is HS256
 
 if not FB_APP_ID or not FB_APP_SECRET or not REDIRECT_URI:
     logging.warning("Facebook env variables are not fully set.")
-
-# ---------------------------
-# SQLAlchemy base (reuse your project's Base if you have one)
-# ---------------------------
-Base = declarative_base()
-
-class InstagramCreatorSocial(Base):
-    """
-    One row per user per platform (instagram). Holds the latest snapshot + tokens + timestamps.
-    """
-    __tablename__ = "instagram_creator_socials"
-
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-
-    platform = Column(String(32), nullable=False, default="instagram")  # 'instagram'
-    facebook_page_id = Column(String(64))            # connected page id
-    facebook_page_name = Column(String(255))         # convenience
-    instagram_user_id = Column(String(64), index=True)
-    instagram_username = Column(String(255))
-
-    followers_count = Column(Integer)
-    reach_7d = Column(Integer)
-    engagement_rate = Column(Float)  # percentage, e.g. 3.25
-
-    long_lived_token = Column(Text, nullable=True)
-    token_last_updated_at = Column(DateTime(timezone=True))
-    insights_last_updated_at = Column(DateTime(timezone=True))
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
-
-    # Relationship back to the UserCreator
-    user = relationship("UserCreator", back_populates="socials")
-
-    __table_args__ = (
-        UniqueConstraint("user_id", "platform", name="uq_user_platform"),
-        Index("ix_creator_socials_insights_updated", "insights_last_updated_at"),
-        Index("ix_creator_socials_token_updated", "token_last_updated_at"),
-        Index("ix_creator_socials_user_platform", "user_id", "platform"),
-    )
 
 # ---------------------------
 # JWT helpers
