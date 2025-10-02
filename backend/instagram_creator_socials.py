@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict, Any, List
 
-import jwt  # PyJWT
+from jose import jwt  # PyJWT
 import requests
 from sqlalchemy import (
     Column, Integer, BigInteger, String, Float, DateTime, ForeignKey, Index,
@@ -116,7 +116,7 @@ def _find_instagram_user(token: str) -> Tuple[str, Optional[str], Optional[str]]
         if ig_user_id:
             return ig_user_id, pid, pinfo.get("name")
 
-    raise RuntimeError("No connected Instagram Business Account found on any page.")
+    raise RuntimeError("No connected Instagram UserBusiness Account found on any page.")
 
 def _get_followers_and_username(ig_user_id: str, token: str) -> Tuple[Optional[int], Optional[str]]:
     r = requests.get(

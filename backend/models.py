@@ -1,38 +1,25 @@
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, JSON, BigInteger, Float, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Table, Text, DateTime, ForeignKey, Boolean, JSON, BigInteger, Float, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from typing import Optional, List
 from datetime import datetime
 from database import Base
 
-# Pydantic models (for API requests/responses)
-class CreatorSignUp(BaseModel):
-    category: str
-    email: EmailStr
-    password: str
+creator_niches = Table('creator_niches', Base.metadata,
+    Column('creator_id', Integer, ForeignKey('users_creators.id')),
+    Column('niche_id', Integer, ForeignKey('niches.id'))
+)
 
-class BusinessSignUp(BaseModel):
-    category: str
-    email: EmailStr
-    password: str
-    business_name: str
-    website_url: str
-    socials: dict[str, str]
-    business_bio: str
+business_industries = Table('business_industries', Base.metadata,
+    Column('business_id', Integer, ForeignKey('users_businesses.id')),
+    Column('industry_id', Integer, ForeignKey('industries.id'))
+)
 
-class Login(BaseModel):
-    email: EmailStr
-    password: str
-
-class GoogleToken(BaseModel):
-    token: str
-
-class GoogleSignUp(BaseModel):
-    category: str
-    token: str
-    business_name: Optional[str] = None
-
+industry_niches = Table('industry_niches', Base.metadata,
+    Column('industry_id', Integer, ForeignKey('industries.id')),
+    Column('niche_id', Integer, ForeignKey('niches.id'))
+)
 
 class UserCreator(Base):
     __tablename__ = "users_creators"
@@ -40,14 +27,20 @@ class UserCreator(Base):
     id = Column(Integer, primary_key=True, index=True)
     category = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=False)
+    bio = Column(String, nullable=False)
     password_hash = Column(String, nullable=False)
+    location = Column(String, nullable=True)
+    profile_image = Column(String, nullable=True)
+    followers_count = Column(Integer, nullable=True)  # Added this field
+    engagement_rate = Column(Float, nullable=True)  # Added for storing engagement rate as float
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
     # Relationships
     conversations = relationship("Conversation", foreign_keys="Conversation.creator_id", back_populates="creator")
-    # 👇 Add this to connect to CreatorSocial
     socials = relationship("InstagramCreatorSocial", back_populates="user", cascade="all, delete")
+    niches = relationship("Niche", secondary=creator_niches, back_populates="creators")
 
 class UserBusiness(Base):
     __tablename__ = "users_businesses"
@@ -58,13 +51,14 @@ class UserBusiness(Base):
     password_hash = Column(String, nullable=False)
     business_name = Column(String, nullable=False)
     website_url = Column(String, nullable=True)
-    socials = Column(JSON, nullable=True)  # Store as JSON
+    socials = Column(JSON, nullable=True)
     business_bio = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
     # Relationships
     conversations = relationship("Conversation", foreign_keys="Conversation.business_id", back_populates="business")
+    industries = relationship("Industry", secondary=business_industries, back_populates="businesses")
 
 class InstagramCreatorSocial(Base):
     """
@@ -131,53 +125,38 @@ class Message(Base):
     # Relationships
     conversation = relationship("Conversation", back_populates="messages")
 
-# Pydantic response models
-class MessageCreate(BaseModel):
-    conversation_id: int
-    content: str
-
-class MessageResponse(BaseModel):
-    id: int
-    conversation_id: int
-    sender_type: str
-    sender_id: int
-    content: str
-    created_at: datetime
-    is_read: bool
+class Niche(Base):
+    __tablename__ = "niches"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
     
-    class Config:
-        from_attributes = True
+    # Relationships
+    creators = relationship("UserCreator", secondary=creator_niches, back_populates="niches")
+    industries = relationship("Industry", secondary=industry_niches, back_populates="niches")
 
-class ConversationCreate(BaseModel):
-    creator_email: str
-    initial_message: str
-
-class ConversationResponse(BaseModel):
-    id: int
-    creator_id: int
-    business_id: int
-    created_at: datetime
-    updated_at: datetime
-    is_active: bool
-    creator_email: str
-    business_name: str
-    last_message: Optional[str] = None
-    last_message_time: Optional[datetime] = None
-    unread_count: int = 0
+class Industry(Base):
+    __tablename__ = "industries"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
     
-    class Config:
-        from_attributes = True
+    # Relationships
+    businesses = relationship("UserBusiness", secondary=business_industries, back_populates="industries")
+    niches = relationship("Niche", secondary=industry_niches, back_populates="industries")
 
-class ConversationDetail(BaseModel):
-    id: int
-    creator_id: int
-    business_id: int
-    created_at: datetime
-    updated_at: datetime
-    is_active: bool
-    creator_email: str
-    business_name: str
-    messages: List[MessageResponse] = []
-    
-    class Config:
-        from_attributes = True
+class BusinessCreatorInteraction(Base):
+    __tablename__ = "business_creator_interactions"
+    id = Column(Integer, primary_key=True, index=True)
+    business_id = Column(Integer, ForeignKey('users_businesses.id'), nullable=False)
+    creator_id = Column(Integer, ForeignKey('users_creators.id'), nullable=False)
+    viewed_at = Column(DateTime(timezone=True), server_default=func.now())
+    interaction_type = Column(String, default='viewed')  # viewed, contacted, hired, etc.
+
+class RecommendationCache(Base):
+    __tablename__ = "recommendation_cache"
+    id = Column(Integer, primary_key=True, index=True)
+    business_id = Column(Integer, ForeignKey('users_businesses.id'), nullable=False)
+    cache_key = Column(String, nullable=False)  # hash of filters + search
+    creator_ids = Column(Text, nullable=False)  # JSON string of creator IDs in order
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True))
+    last_accessed = Column(DateTime(timezone=True), server_default=func.now())

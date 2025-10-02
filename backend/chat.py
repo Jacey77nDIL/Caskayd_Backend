@@ -7,6 +7,7 @@ from sqlalchemy import and_, or_, desc, func
 from database import get_db
 from models import UserCreator, UserBusiness, Conversation, Message
 import models
+import schemas
 from typing import List, Optional
 logger = logging.getLogger(__name__)
 class ChatService:
@@ -24,7 +25,7 @@ class ChatService:
     
     @staticmethod
     async def create_conversation(current_user_email: str, current_user_role: str, 
-                                data: models.ConversationCreate, db: AsyncSession = Depends(get_db)):
+                                data: schemas.ConversationCreate, db: AsyncSession = Depends(get_db)):
         """Create a new conversation between business and creator"""
         
         
@@ -43,7 +44,7 @@ class ChatService:
         if not creator:
             return None
         if not business or not creator:
-            print("DEBUG: Business ->", business, "Creator ->", creator)
+            print("DEBUG: UserBusiness ->", business, "UserCreator ->", creator)
             return None
         
             
@@ -80,7 +81,7 @@ class ChatService:
     
     @staticmethod
     async def get_conversations(current_user_email: str, current_user_role: str, 
-                              db: AsyncSession = Depends(get_db)) -> List[models.ConversationResponse]:
+                              db: AsyncSession = Depends(get_db)) -> List[schemas.ConversationResponse]:
         """Get all conversations for the current user"""
         
         user, role = await ChatService.get_user_by_email_and_role(current_user_email, current_user_role, db)
@@ -148,7 +149,7 @@ class ChatService:
     
     @staticmethod
     async def get_conversation_detail(conversation_id: int, current_user_email: str, 
-                                    current_user_role: str, db: AsyncSession = Depends(get_db)) -> Optional[models.ConversationDetail]:
+                                    current_user_role: str, db: AsyncSession = Depends(get_db)) -> Optional[schemas.ConversationDetail]:
         """Get detailed conversation with messages"""
         
         user, role = await ChatService.get_user_by_email_and_role(current_user_email, current_user_role, db)
@@ -203,7 +204,7 @@ class ChatService:
     
     @staticmethod
     async def send_message(current_user_email: str, current_user_role: str, 
-                         data: models.MessageCreate, db: AsyncSession = Depends(get_db)) -> Optional[models.MessageResponse]:
+                         data: schemas.MessageCreate, db: AsyncSession = Depends(get_db)) -> Optional[schemas.MessageResponse]:
         """Send a message in a conversation"""
         
         user, role = await ChatService.get_user_by_email_and_role(current_user_email, current_user_role, db)
