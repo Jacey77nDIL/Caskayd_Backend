@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
-from instagram_creator_socials import Base, InstagramCreatorSocial, refresh_insights_for_row, refresh_long_lived_token_for_row
-
+from instagram_creator_socials import InstagramCreatorSocial, refresh_insights_for_row, refresh_long_lived_token_for_row
+from models import Base
 logging.basicConfig(level=logging.INFO)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -46,7 +46,7 @@ def process_due_insights(db: Session):
 
     processed = 0
     for (row_id,) in rows:
-        cs: CreatorSocial = db.get(CreatorSocial, row_id)
+        cs: InstagramCreatorSocial = db.get(InstagramCreatorSocial, row_id)
         if cs:
             try:
                 refresh_insights_for_row(db, cs)
@@ -78,7 +78,7 @@ def process_due_tokens(db: Session):
 
     processed = 0
     for (row_id,) in rows:
-        cs: CreatorSocial = db.get(CreatorSocial, row_id)
+        cs: InstagramCreatorSocial = db.get(InstagramCreatorSocial, row_id)
         if cs:
             try:
                 refresh_long_lived_token_for_row(db, cs)
