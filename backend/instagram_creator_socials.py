@@ -12,6 +12,7 @@ from sqlalchemy import (
     UniqueConstraint, Text, func, select, and_, update
 )
 from sqlalchemy.orm import declarative_base, relationship, Session
+from auth import decode_user_id_from_jwt
 from models import InstagramCreatorSocial
 
 # ---------------------------
@@ -30,25 +31,6 @@ if not FB_APP_ID or not FB_APP_SECRET or not REDIRECT_URI:
 # ---------------------------
 # JWT helpers
 # ---------------------------
-def decode_user_id_from_jwt(authorization_header: str) -> int:
-    """
-    Expects 'Authorization: Bearer <jwt>'.
-    Returns internal user_id from JWT claims (sub or user_id).
-    """
-    if not authorization_header or not authorization_header.lower().startswith("bearer "):
-        raise ValueError("Missing or invalid Authorization header.")
-
-    token = authorization_header.split(" ", 1)[1].strip()
-    try:
-        claims = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM], options={"verify_aud": False})
-    except Exception as e:
-        raise ValueError(f"Invalid JWT: {e}")
-
-    # Adjust to your frontend’s JWT claim names
-    user_id = claims.get("sub") or claims.get("user_id") or claims.get("id")
-    if not user_id:
-        raise ValueError("JWT missing user identifier (sub/user_id/id).")
-    return int(user_id)
 
 # ---------------------------
 # Facebook / Instagram Graph helpers

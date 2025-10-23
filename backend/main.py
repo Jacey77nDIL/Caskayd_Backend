@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
-from fastapi import FastAPI, Depends, HTTPException, Request, Header
+import uuid
+from fastapi import FastAPI, Depends, HTTPException, Request, Header, logger
 from fastapi.middleware.cors import CORSMiddleware
+import httpx
 from sqlalchemy import and_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
+import campaign_service
+from paystack_service import paystack_service
 from database import Base, get_db, engine
 import models, auth
 from fastapi.security import OAuth2PasswordBearer
@@ -19,7 +23,6 @@ from models import UserCreator
 from sqlalchemy.future import select
 from passlib.context import CryptContext
 from instagram_creator_socials import InstagramCreatorSocial, exchange_token_and_upsert_insights
-import logging
 import requests
 import schemas
 from fastapi import Query
@@ -27,11 +30,18 @@ from recommendation_service import recommendation_service
 from models import UserBusiness, Niche, Industry, UserCreator
 from sqlalchemy.orm import selectinload
 from typing import Optional, Dict, Any, List
+import uuid
+import tiktok_service
+from auth import decode_jwt_from_header, decode_user_id_from_jwt
+from fastapi import Header
+import logging
+from cloudflare_service import cloudflare_service
 
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s"
 )
+logger = logging.getLogger(__name__)
 app = FastAPI()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -39,7 +49,7 @@ ALGORITHM = os.getenv("ALGORITHM")
 FB_APP_ID = os.getenv("FB_APP_ID")
 FB_APP_SECRET = os.getenv("FB_APP_SECRET")
 REDIRECT_URI = "https://caskayd-application.vercel.app/auth/callback/facebook"
-
+PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -96,6 +106,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise HTTPException(status_code=401, detail="Invalid token")
     
 
+# --- In main.py, inside @app.post("/auth/facebook") ---
+
 @app.post("/auth/facebook")
 async def facebook_auth(
     request: Request,
@@ -112,14 +124,24 @@ async def facebook_auth(
         raise HTTPException(status_code=400, detail="Missing 'code' in body.")
 
     try:
-        result = exchange_token_and_upsert_insights(db, code, authorization)
+        # 1. You can still use the new helpers for validation (good)
+        payload = decode_jwt_from_header(authorization)
+        user, role = await decode_user_id_from_jwt(payload, db)
+        
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can link Facebook accounts")
+
+        from instagram_creator_socials import exchange_token_and_upsert_insights
+        
+        # 2. THE FIX: Pass the original 'authorization' string, NOT the 'payload'
+        result = exchange_token_and_upsert_insights(db, code, authorization) 
+
         return {"status": "ok", "data": result}
     except ValueError as ve:
         raise HTTPException(status_code=401, detail=str(ve))
     except Exception as e:
-        # Optional: log e
+        logger.error(f"Facebook auth error: {e}") # Use your logger
         raise HTTPException(status_code=500, detail=f"Auth/Insights failed: {e}")
-
 
 @app.get("/chat/creators", response_model=List[dict])
 async def get_creators(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
@@ -896,3 +918,734 @@ async def get_creator_profile(db: AsyncSession = Depends(get_db)):
      except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+
+@app.post("/payments/initialize")
+async def initialize_payment(
+    payment_data: schemas.PaymentInitialize,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Initialize a payment transaction
+    Amount should be in Naira (e.g., 5000 for ₦5,000)
+    """
+    try:
+        # Verify token and get user info
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if not email:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        # Get user ID
+        if role == "creator":
+            user_result = await db.execute(
+                select(UserCreator).where(UserCreator.email == email)
+            )
+            user = user_result.scalar()
+        else:
+            user_result = await db.execute(
+                select(UserBusiness).where(UserBusiness.email == email)
+            )
+            user = user_result.scalar()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Generate unique reference
+        reference = f"TXN-{uuid.uuid4().hex[:16].upper()}"
+        
+        # Convert amount from Naira to kobo (multiply by 100)
+        amount_in_kobo = int(payment_data.amount * 100)
+        
+        # Add user info to metadata
+        metadata = payment_data.metadata or {}
+        metadata.update({
+            "user_id": user.id,
+            "user_type": role,
+            "user_email": email,
+            "purpose": payment_data.purpose or "general"
+        })
+        
+        # Initialize payment with Paystack
+        result = await paystack_service.initialize_transaction(
+            email=email,
+            amount=amount_in_kobo,
+            currency=payment_data.currency,
+            reference=reference,
+            callback_url=payment_data.callback_url,
+            metadata=metadata
+        )
+        
+        # Save transaction to database
+        from models import Transaction, TransactionStatus
+        transaction = Transaction(
+            reference=reference,
+            amount=payment_data.amount,
+            currency=payment_data.currency,
+            email=email,
+            user_id=user.id,
+            user_type=role,
+            status=TransactionStatus.pending,
+            authorization_url=result["authorization_url"],
+            access_code=result["access_code"],
+            purpose=payment_data.purpose,
+            transaction_metadata=metadata  # Changed from metadata
+        )
+        
+        db.add(transaction)
+        await db.commit()
+        await db.refresh(transaction)
+        
+        return {
+            "success": True,
+            "message": "Payment initialized successfully",
+            "data": {
+                "authorization_url": result["authorization_url"],
+                "access_code": result["access_code"],
+                "reference": reference,
+                "amount": payment_data.amount,
+                "currency": payment_data.currency
+            }
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        await db.rollback()
+        logging.error(f"Payment initialization error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Payment initialization failed: {str(e)}")
+
+
+@app.get("/payments/verify/{reference}")
+async def verify_payment(
+    reference: str,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verify a payment transaction
+    """
+    try:
+        # Verify token
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        
+        if not email:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        # Get transaction from database
+        from models import Transaction, TransactionStatus
+        transaction_result = await db.execute(
+            select(Transaction).where(Transaction.reference == reference)
+        )
+        transaction = transaction_result.scalar()
+        
+        if not transaction:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        
+        # Verify with Paystack
+        result = await paystack_service.verify_transaction(reference)
+        
+        # Update transaction status
+        if result["transaction_status"] == "success":
+            transaction.status = TransactionStatus.success
+            transaction.paid_at = datetime.now(timezone.utc)
+        elif result["transaction_status"] == "failed":
+            transaction.status = TransactionStatus.failed
+        else:
+            transaction.status = TransactionStatus.abandoned
+        
+        await db.commit()
+        
+        return {
+            "success": True,
+            "message": "Payment verification successful",
+            "data": {
+                "reference": result["reference"],
+                "status": result["transaction_status"],
+                "amount": result["amount"] / 100,  # Convert from kobo to Naira
+                "currency": result["currency"],
+                "paid_at": result["paid_at"],
+                "customer": result["customer"]
+            }
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        logging.error(f"Payment verification error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Payment verification failed: {str(e)}")
+
+
+@app.get("/payments/history")
+async def get_payment_history(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get payment history for the current user
+    """
+    try:
+        # Verify token and get user info
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if not email:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        # Get user ID
+        if role == "creator":
+            user_result = await db.execute(
+                select(UserCreator).where(UserCreator.email == email)
+            )
+            user = user_result.scalar()
+        else:
+            user_result = await db.execute(
+                select(UserBusiness).where(UserBusiness.email == email)
+            )
+            user = user_result.scalar()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Get transactions
+        from models import Transaction
+        transactions_result = await db.execute(
+            select(Transaction)
+            .where(Transaction.user_id == user.id)
+            .order_by((Transaction.created_at))
+        )
+        transactions = transactions_result.scalars().all()
+        
+        return {
+            "success": True,
+            "message": f"Found {len(transactions)} transactions",
+            "data": {
+                "transactions": [
+                    {
+                        "id": t.id,
+                        "reference": t.reference,
+                        "amount": t.amount,
+                        "currency": t.currency,
+                        "status": t.status.value,
+                        "purpose": t.purpose,
+                        "paid_at": t.paid_at.isoformat() if t.paid_at else None,
+                        "created_at": t.created_at.isoformat()
+                    }
+                    for t in transactions
+                ]
+            }
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        logging.error(f"Error fetching payment history: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch payment history: {str(e)}")
+
+
+@app.post("/payments/webhook")
+async def paystack_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Handle Paystack webhook events
+    Paystack will send notifications here when payment status changes
+    """
+    try:
+        import hmac
+        import hashlib
+        
+        # Get the signature from headers
+        signature = request.headers.get("x-paystack-signature")
+        
+        # Get the raw body
+        body = await request.body()
+        
+        # Verify the signature
+        computed_signature = hmac.new(
+            PAYSTACK_SECRET.encode('utf-8'),
+            body,
+            hashlib.sha512
+        ).hexdigest()
+        
+        if signature != computed_signature:
+            raise HTTPException(status_code=400, detail="Invalid signature")
+        
+        # Parse the event
+        event = await request.json()
+        event_type = event.get("event")
+        data = event.get("data", {})
+        
+        # Handle charge.success event
+        if event_type == "charge.success":
+            reference = data.get("reference")
+            
+            # Update transaction in database
+            from models import Transaction, TransactionStatus
+            transaction_result = await db.execute(
+                select(Transaction).where(Transaction.reference == reference)
+            )
+            transaction = transaction_result.scalar()
+            
+            if transaction:
+                transaction.status = TransactionStatus.success
+                transaction.paid_at = datetime.now(timezone.utc)
+                await db.commit()
+                
+                logging.info(f"Payment successful for reference: {reference}")
+                
+                # TODO: Add custom logic here (e.g., send email, update subscription)
+        
+        return {"status": "success"}
+        
+    except Exception as e:
+        logging.error(f"Webhook error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Webhook processing failed")
+    
+
+@app.post("/campaigns", response_model=schemas.CampaignCreateResponse)
+async def create_campaign(
+    data: schemas.CampaignCreateWithFilters,  # <--- THE FIX IS HERE
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create a new campaign and get initial creator recommendations.
+    (Business only)
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can create campaigns")
+        
+        # Get business
+        business_result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        business = business_result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+        
+        # Create the base campaign data object for the service
+        campaign_data = schemas.CampaignCreate(
+            title=data.title,
+            description=data.description,
+            brief=data.brief,
+            brief_file_url=data.brief_file_url,
+            budget=data.budget,
+            start_date=data.start_date,
+            end_date=data.end_date
+        )
+        
+        # --- Call Campaign Service ---
+        # Note: We call campaign_service.campaign_service (file.instance.method)
+        campaign = await campaign_service.campaign_service.create_campaign(
+            business.id, campaign_data, db
+        )
+        
+        # Get the full campaign detail for the response
+        campaign_detail = await campaign_service.campaign_service.get_campaign_detail(
+            campaign.id, business.id, db
+        )
+        
+        # --- Call Recommendation Service ---
+        
+        # Convert the filters object to the dict the service expects
+        filter_dict = data.filters.model_dump(exclude_unset=True)
+        
+        # Rename 'niche_ids' to 'niches' for the service
+        if 'niche_ids' in filter_dict:
+             filter_dict['niches'] = filter_dict.pop('niche_ids')
+
+        recommendations_list = await recommendation_service.get_recommendations(
+            business_id=business.id,
+            db=db,
+            search_query=None,
+            filters=filter_dict,
+            offset=0,
+            limit=10 
+        )
+        
+        # --- Return the combined response ---
+        return schemas.CampaignCreateResponse(
+            campaign=campaign_detail,
+            recommendations=recommendations_list
+        )
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        await db.rollback() 
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/campaigns", response_model=List[schemas.CampaignListResponse])
+async def get_campaigns_endpoint(
+    status: Optional[str] = Query(None, description="Filter by campaign status"),
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all campaigns for the authenticated business"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can view campaigns")
+        
+        # Get business
+        business_result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        business = business_result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+        
+        campaigns = await campaign_service.get_campaigns(business.id, db, status)
+        
+        return campaigns
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/campaigns/{campaign_id}", response_model=schemas.CampaignResponse)
+async def get_campaign_detail_endpoint(
+    campaign_id: int,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get detailed information about a campaign"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can view campaign details")
+        
+        # Get business
+        business_result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        business = business_result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+        
+        campaign = await campaign_service.get_campaign_detail(campaign_id, business.id, db)
+        
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        
+        return campaign
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.put("/campaigns/{campaign_id}", response_model=schemas.CampaignResponse)
+async def update_campaign_endpoint(
+    campaign_id: int,
+    data: schemas.CampaignUpdate,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update a campaign"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can update campaigns")
+        
+        # Get business
+        business_result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        business = business_result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+        
+        campaign = await campaign_service.update_campaign(campaign_id, business.id, data, db)
+        
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        
+        # Return updated campaign detail
+        campaign_detail = await campaign_service.get_campaign_detail(campaign.id, business.id, db)
+        
+        return campaign_detail
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/campaigns/{campaign_id}/creators")
+async def add_creators_to_campaign_endpoint(
+    campaign_id: int,
+    data: schemas.CampaignCreatorAdd,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Add creators to a campaign"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can add creators to campaigns")
+        
+        # Get business
+        business_result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        business = business_result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+        
+        added_creators = await campaign_service.campaign_service.add_creators_to_campaign(
+            campaign_id, business.id, data.creator_ids, data.notes, db
+        )
+        
+        return {
+            "success": True,
+            "message": f"Added {len(added_creators)} creator(s) to campaign",
+            "added_count": len(added_creators)
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.delete("/campaigns/{campaign_id}/creators/{creator_id}")
+async def remove_creator_from_campaign_endpoint(
+    campaign_id: int,
+    creator_id: int,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Remove a creator from a campaign"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can remove creators from campaigns")
+        
+        # Get business
+        business_result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        business = business_result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+        
+        success = await campaign_service.remove_creator_from_campaign(
+            campaign_id, business.id, creator_id, db
+        )
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Creator not found in campaign")
+        
+        return {
+            "success": True,
+            "message": "Creator removed from campaign"
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/campaigns/{campaign_id}/send-brief")
+async def send_campaign_brief_endpoint(
+    campaign_id: int,
+    data: schemas.CampaignBriefSend,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Send campaign brief to all invited creators via chat"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can send campaign briefs")
+        
+        # Get business
+        business_result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        business = business_result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+        
+        result = await campaign_service.send_brief_to_creators(
+            campaign_id, business.id, data.custom_message, db
+        )
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        
+        return result
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.delete("/campaigns/{campaign_id}")
+async def delete_campaign_endpoint(
+    campaign_id: int,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a campaign"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can delete campaigns")
+        
+        # Get business
+        business_result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        business = business_result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+        
+        success = await campaign_service.delete_campaign(campaign_id, business.id, db)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        
+        return {
+            "success": True,
+            "message": "Campaign deleted successfully"
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+    
+
+@app.get("/auth/tiktok/start", response_model=schemas.TikTokAuthUrlResponse)
+async def start_tiktok_auth(token: str = Depends(oauth2_scheme)):
+    """
+    Get the URL to redirect a creator to for TikTok authentication.
+    """
+    try:
+        # We just need to validate the token is real
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        role = payload.get("role")
+        
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can link TikTok accounts")
+            
+        # Create a unique state value for security
+        state = str(uuid.uuid4())
+        # In a real app, you might save this state in Redis or
+        # the user's session to verify it on callback.
+        
+        url = tiktok_service.tiktok_service.get_authorization_url(state)
+        return {"authorization_url": url}
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=f"Service error: {str(e)}")
+
+
+# --- In main.py ---
+
+@app.post("/auth/tiktok/callback")
+async def handle_tiktok_auth_callback(
+    data: schemas.TikTokAuthCallback,
+    authorization: str = Header(None), 
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        # --- THIS IS THE CORRECT LOGIC ---
+        
+        # 1. Call this function ONCE with the 'authorization' string
+        payload = decode_jwt_from_header(authorization) 
+        
+        # 2. Use the 'payload' dict in the NEXT function
+        user, role = await decode_user_id_from_jwt(payload, db) 
+        
+        # -----------------------------------
+        # DO NOT DO THIS (This is wrong and causes your error):
+        # payload = decode_jwt_from_header(authorization)
+        # payload = decode_jwt_from_header(payload) # <--- WRONG
+        # -----------------------------------
+
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can link TikTok accounts")
+        
+        result = await tiktok_service.tiktok_service.exchange_code_and_upsert_data(
+            db=db,
+            code=data.code,
+            creator_user_id=user.id
+        )
+        
+        return {"status": "ok", "data": result}
+
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        logger.error(f"TikTok callback error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+    
+
+@app.post("/uploads/presigned-url")
+async def get_presigned_upload_url(
+    data: schemas.PresignedUrlRequest,
+    token: str = Depends(oauth2_scheme) # Protect the endpoint
+):
+    """
+    Generates a presigned URL for the client to upload a file to Cloudflare R2.
+    """
+    try:
+        # Just ensure the user is logged in
+        jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        
+        result = cloudflare_service.generate_presigned_upload_url(
+            file_name=data.file_name,
+            file_type=data.file_type
+        )
+        if not result:
+            raise HTTPException(status_code=500, detail="Could not generate upload URL.")
+            
+        return result
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
