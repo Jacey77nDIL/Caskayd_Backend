@@ -1,5 +1,6 @@
 from datetime import datetime
-from typing import List, Optional
+from enum import Enum
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, EmailStr
 
 
@@ -34,7 +35,9 @@ class GoogleSignUp(BaseModel):
 
 class MessageCreate(BaseModel):
     conversation_id: int
-    content: str
+    content: Optional[str] = None 
+    file_url: Optional[str] = None
+    file_type: Optional[str] = None
 
 class MessageResponse(BaseModel):
     id: int
@@ -91,3 +94,163 @@ class CreatorProfileSetup(BaseModel):
     engagement_rate: Optional[str] = None
     profile_image: Optional[str] = None
     niche_ids: List[int] = []
+
+from pydantic import BaseModel
+from typing import Optional
+
+class PaymentInitialize(BaseModel):
+    amount: float  # Amount in Naira (will be converted to kobo)
+    currency: str = "NGN"
+    callback_url: Optional[str] = None
+    purpose: Optional[str] = None
+    metadata: Optional[dict] = None
+
+class PaymentInitializeResponse(BaseModel):
+    status: bool
+    authorization_url: str
+    access_code: str
+    reference: str
+
+class PaymentVerifyResponse(BaseModel):
+    status: bool
+    transaction_status: str
+    reference: str
+    amount: float
+    currency: str
+    paid_at: Optional[str] = None
+
+class CampaignStatusEnum(str, Enum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+class CreatorCampaignStatusEnum(str, Enum):
+    INVITED = "invited"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    REMOVED = "removed"
+
+class CampaignCreate(BaseModel):
+    title: str
+    description: str
+    brief: Optional[str] = None
+    brief_file_url: Optional[str] = None
+    budget: Optional[float] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+class CampaignUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    brief: Optional[str] = None
+    brief_file_url: Optional[str] = None
+    budget: Optional[float] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    status: Optional[CampaignStatusEnum] = None
+
+class CampaignCreatorAdd(BaseModel):
+    creator_ids: List[int]
+    notes: Optional[str] = None
+
+class CampaignBriefSend(BaseModel):
+    campaign_id: int
+    custom_message: Optional[str] = None
+
+class CreatorCampaignResponse(BaseModel):
+    id: int
+    creator_id: int
+    creator_name: str
+    creator_email: str
+    status: CreatorCampaignStatusEnum
+    invited_at: datetime
+    responded_at: Optional[datetime] = None
+    notes: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class CampaignResponse(BaseModel):
+    id: int
+    business_id: int
+    title: str
+    description: str
+    brief: Optional[str] = None
+    budget: Optional[float] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    status: CampaignStatusEnum
+    created_at: datetime
+    updated_at: datetime
+    creators_count: int = 0
+    creators: List[CreatorCampaignResponse] = []
+    
+    class Config:
+        from_attributes = True
+
+class CampaignListResponse(BaseModel):
+    id: int
+    title: str
+    description: str
+    status: CampaignStatusEnum
+    budget: Optional[float] = None
+    creators_count: int = 0
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class CampaignCreatorFilters(BaseModel):
+    """
+    Filters for finding creators, to be passed
+    during campaign creation.
+    """
+    location: Optional[str] = None
+    min_followers: Optional[int] = None
+    max_followers: Optional[int] = None
+    engagement_rate: Optional[float] = None
+    niche_ids: List[int] = []
+
+class CampaignCreateWithFilters(CampaignCreate):
+    """
+    A new schema for the endpoint that includes
+    the campaign data AND the targeting filters.
+    """
+    filters: CampaignCreatorFilters
+
+class SimpleCreator(BaseModel):
+    """
+    A simplified creator schema for the
+    recommendation list.
+    """
+    id: int
+    name: str
+    bio: Optional[str] = None
+    followers_count: Optional[int] = 0
+    engagement_rate: Optional[str] = "N/A"
+    instagram_username: Optional[str] = None
+    niches: List[Dict[str, Any]] = []
+
+class CampaignCreateResponse(BaseModel):
+    """
+    The new response model for the POST /campaigns endpoint.
+    """
+    campaign: CampaignResponse
+    recommendations: List[SimpleCreator]
+
+# --- Add these classes to schemas.py ---
+
+class TikTokAuthUrlResponse(BaseModel):
+    authorization_url: str
+
+class TikTokAuthCallback(BaseModel):
+    code: str
+    state: Optional[str] = None 
+
+
+class PresignedUrlRequest(BaseModel):
+    file_name: str
+    file_type: str 

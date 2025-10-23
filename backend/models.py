@@ -1,10 +1,11 @@
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import Column, Integer, String, Table, Text, DateTime, ForeignKey, Boolean, JSON, BigInteger, Float, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Table, Text, DateTime, ForeignKey, Boolean, JSON, BigInteger, Float, UniqueConstraint, Index, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from typing import Optional, List
 from datetime import datetime
 from database import Base
+import enum
 
 creator_niches = Table('creator_niches', Base.metadata,
     Column('creator_id', Integer, ForeignKey('users_creators.id')),
@@ -118,11 +119,14 @@ class Message(Base):
     conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
     sender_type = Column(String, nullable=False)  
     sender_id = Column(Integer, nullable=False)  
-    content = Column(Text, nullable=False)
+    content = Column(Text, nullable=True) 
+    file_url = Column(String(1024), nullable=True)
+    file_type = Column(String(100), nullable=True)
+    
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     is_read = Column(Boolean, default=False)
     
-    # Relationships
     conversation = relationship("Conversation", back_populates="messages")
 
 class Niche(Base):
@@ -160,3 +164,128 @@ class RecommendationCache(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True))
     last_accessed = Column(DateTime(timezone=True), server_default=func.now())
+
+class TransactionStatus(enum.Enum):
+    pending = "pending"
+    success = "success"
+    failed = "failed"
+    abandoned = "abandoned"
+
+class Transaction(Base):
+    __tablename__ = "transactions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    reference = Column(String, unique=True, nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    currency = Column(String, default="NGN")
+    email = Column(String, nullable=False)
+    status = Column(SQLEnum(TransactionStatus), default=TransactionStatus.pending)
+    
+    # User information
+    user_id = Column(Integer, nullable=True)  # Could be creator or business
+    user_type = Column(String, nullable=True)  # 'creator' or 'business'
+    
+    # Transaction details
+    authorization_url = Column(Text, nullable=True)
+    access_code = Column(String, nullable=True)
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # Metadata
+    purpose = Column(String, nullable=True)  # e.g., 'subscription', 'campaign_payment'
+    transaction_metadata = Column(JSON, nullable=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class CampaignStatus(str, enum.Enum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+class CreatorCampaignStatus(str, enum.Enum):
+    INVITED = "invited"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    REMOVED = "removed"
+
+class Campaign(Base):
+    __tablename__ = "campaigns"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    business_id = Column(Integer, ForeignKey("users_businesses.id"), nullable=False)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=False)
+
+    # --- 3. Change brief from Text to a file URL ---
+    brief = Column(Text, nullable=True) # Keep this for old data or simple text briefs
+    brief_file_url = Column(String(1024), nullable=True)
+    # -----------------------------------------------
+
+    budget = Column(Float, nullable=True)
+    start_date = Column(DateTime(timezone=True), nullable=True)
+    end_date = Column(DateTime(timezone=True), nullable=True)
+    status = Column(SQLEnum(CampaignStatus), default=CampaignStatus.DRAFT, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    
+    business = relationship("UserBusiness", backref="campaigns")
+    campaign_creators = relationship("CampaignCreator", back_populates="campaign", cascade="all, delete-orphan")
+
+class CampaignCreator(Base):
+    __tablename__ = "campaign_creators"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=False)
+    creator_id = Column(Integer, ForeignKey("users_creators.id"), nullable=False)
+    status = Column(SQLEnum(CreatorCampaignStatus), default=CreatorCampaignStatus.INVITED, nullable=False)
+    invited_at = Column(DateTime(timezone=True), server_default=func.now())
+    responded_at = Column(DateTime(timezone=True), nullable=True)
+    notes = Column(Text, nullable=True)  # Business notes about this creator for the campaign
+    
+    # Relationships
+    campaign = relationship("Campaign", back_populates="campaign_creators")
+    creator = relationship("UserCreator", backref="campaign_participations")
+
+# --- Add this class to models.py ---
+
+class TikTokCreatorSocial(Base):
+    """
+    Stores TikTok OAuth tokens and basic insights for a creator.
+    """
+    __tablename__ = "tiktok_creator_socials"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users_creators.id", ondelete="CASCADE"), nullable=False)
+    
+    platform = Column(String(32), nullable=False, default="tiktok")
+    open_id = Column(String(128), index=True, nullable=False) # TikTok's user ID
+    union_id = Column(String(128), index=True)
+    
+    tiktok_username = Column(String(255))
+    display_name = Column(String(255))
+    profile_image_url = Column(Text)
+
+    followers_count = Column(BigInteger)
+    likes_count = Column(BigInteger)
+    video_count = Column(Integer)
+    
+    access_token = Column(Text, nullable=True)
+    refresh_token = Column(Text, nullable=True)
+    token_expires_at = Column(DateTime(timezone=True))
+    refresh_token_expires_at = Column(DateTime(timezone=True))
+    
+    token_last_updated_at = Column(DateTime(timezone=True))
+    insights_last_updated_at = Column(DateTime(timezone=True))
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+    # Relationship back to the UserCreator
+    user = relationship("UserCreator", backref="tiktok_socials")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "platform", name="uq_user_platform_tiktok"),
+        Index("ix_tiktok_socials_open_id", "open_id"),
+    )

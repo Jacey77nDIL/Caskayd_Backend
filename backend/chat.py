@@ -225,11 +225,16 @@ class ChatService:
             return None
             
         
+        if not data.content and not data.file_url:
+            raise ValueError("Message must have either content or a file_url.")
+
         message = Message(
             conversation_id=data.conversation_id,
             sender_type=role,
             sender_id=user.id,
-            content=data.content
+            content=data.content,
+            file_url=data.file_url,
+            file_type=data.file_type
         )
         db.add(message)
         
