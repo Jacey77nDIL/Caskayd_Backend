@@ -2,7 +2,6 @@ from datetime import datetime, timezone
 import uuid
 from fastapi import FastAPI, Depends, HTTPException, Request, Header, logger
 from fastapi.middleware.cors import CORSMiddleware
-import httpx
 from sqlalchemy import and_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 import campaign_service
