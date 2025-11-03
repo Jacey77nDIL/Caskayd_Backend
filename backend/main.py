@@ -1245,20 +1245,17 @@ async def create_campaign(
             end_date=data.end_date
         )
         
-        # --- Call Campaign Service ---
-        # Note: We call campaign_service.campaign_service (file.instance.method)
+        
         campaign = await campaign_service.campaign_service.create_campaign(
             business.id, campaign_data, db
         )
         
-        # Get the full campaign detail for the response
+        
         campaign_detail = await campaign_service.campaign_service.get_campaign_detail(
             campaign.id, business.id, db
         )
         
-        # --- Call Recommendation Service ---
         
-        # Convert the filters object to the dict the service expects
         filter_dict = data.filters.model_dump(exclude_unset=True)
         
         # Rename 'niche_ids' to 'niches' for the service
@@ -1502,7 +1499,7 @@ async def send_campaign_brief_endpoint(
         if not business:
             raise HTTPException(status_code=404, detail="Business not found")
         
-        result = await campaign_service.send_brief_to_creators(
+        result = await campaign_service.campaign_service.send_brief_to_creators(
             campaign_id, business.id, data.custom_message, db
         )
         
@@ -1540,7 +1537,7 @@ async def delete_campaign_endpoint(
         if not business:
             raise HTTPException(status_code=404, detail="Business not found")
         
-        success = await campaign_service.delete_campaign(campaign_id, business.id, db)
+        success = await campaign_service.campaign_service.delete_campaign(campaign_id, business.id, db)
         
         if not success:
             raise HTTPException(status_code=404, detail="Campaign not found")
