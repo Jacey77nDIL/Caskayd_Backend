@@ -11,9 +11,10 @@ from models import (
     Conversation, Message, CampaignStatus, CreatorCampaignStatus
 )
 import schemas
+import logging
 
 logger = logging.getLogger(__name__)
-import logging
+
 from typing import List, Optional
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -402,6 +403,7 @@ class CampaignService:
         await db.delete(campaign)
         await db.commit()
         return True
+  
 
 # Global instance
 campaign_service = CampaignService()
