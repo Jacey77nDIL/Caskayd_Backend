@@ -1,10 +1,12 @@
 from datetime import datetime, timezone
+import logging
 import uuid
 from fastapi import FastAPI, Depends, HTTPException, Request, Header, logger
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 import campaign_service
+import cloudflare_service
 from paystack_service import paystack_service
 from database import Base, get_db, engine
 import models, auth
@@ -14,6 +16,7 @@ import os
 from chat import ChatService
 from typing import List
 from fastapi import WebSocket, WebSocketDisconnect
+import tiktok_service
 from websocket_ import manager
 from sqlalchemy.future import select
 from models import Conversation
@@ -30,29 +33,60 @@ from models import UserBusiness, Niche, Industry, UserCreator
 from sqlalchemy.orm import selectinload
 from typing import Optional, Dict, Any, List
 import uuid
-import tiktok_service
-from auth import decode_jwt_from_header, decode_user_id_from_jwt
-from fastapi import Header
-import logging
-from cloudflare_service import cloudflare_service
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 app = FastAPI()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM")
-FB_APP_ID = os.getenv("FB_APP_ID")
-FB_APP_SECRET = os.getenv("FB_APP_SECRET")
-REDIRECT_URI = "https://caskayd-application.vercel.app/auth/callback/facebook"
-PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET")
+
+# Environment variables
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key")
+ALGORITHM = "HS256"
+PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET", "")
+
+def decode_jwt_from_header(authorization: str) -> dict:
+    """Extract and decode JWT from Authorization header"""
+    if not authorization:
+        raise ValueError("Missing authorization header")
+    
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise ValueError("Invalid authorization header format")
+    
+    token = parts[1]
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError as e:
+        raise ValueError(f"Invalid token: {str(e)}")
+
+async def decode_user_id_from_jwt(payload: dict, db: AsyncSession) -> tuple:
+    """Decode user info from JWT payload"""
+    email = payload.get("sub")
+    role = payload.get("role")
+    
+    if not email or not role:
+        raise ValueError("Invalid token payload")
+    
+    if role == "creator":
+        result = await db.execute(
+            select(UserCreator).where(UserCreator.email == email)
+        )
+        user = result.scalar()
+    else:
+        result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        user = result.scalar()
+    
+    if not user:
+        raise ValueError(f"User not found for email: {email}")
+    
+    return user, role
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -107,6 +141,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 # --- In main.py, inside @app.post("/auth/facebook") ---
 
+# In backend/main.py
+
 @app.post("/auth/facebook")
 async def facebook_auth(
     request: Request,
@@ -123,7 +159,7 @@ async def facebook_auth(
         raise HTTPException(status_code=400, detail="Missing 'code' in body.")
 
     try:
-        # 1. You can still use the new helpers for validation (good)
+        # 1. Decode user here (already working)
         payload = decode_jwt_from_header(authorization)
         user, role = await decode_user_id_from_jwt(payload, db)
         
@@ -132,14 +168,14 @@ async def facebook_auth(
 
         from instagram_creator_socials import exchange_token_and_upsert_insights
         
-        # 2. THE FIX: Pass the original 'authorization' string, NOT the 'payload'
-        result = exchange_token_and_upsert_insights(db, code, authorization) 
+        # 2. THE FIX: Pass user.id directly and await the function
+        result = await exchange_token_and_upsert_insights(db, code, user.id) 
 
         return {"status": "ok", "data": result}
     except ValueError as ve:
         raise HTTPException(status_code=401, detail=str(ve))
     except Exception as e:
-        logger.error(f"Facebook auth error: {e}") # Use your logger
+        logger.error(f"Facebook auth error: {e}")
         raise HTTPException(status_code=500, detail=f"Auth/Insights failed: {e}")
 
 @app.get("/chat/creators", response_model=List[dict])

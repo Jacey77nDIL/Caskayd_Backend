@@ -1,7 +1,7 @@
 # backend/paystack_service.py
 import os
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import httpx
 from datetime import datetime
 
@@ -126,6 +126,103 @@ class PaystackService:
             logger.error(f"Paystack verification error: {str(e)}")
             raise
 
+
+    async def get_banks(self) -> List[Dict[str, Any]]:
+        """Fetch list of supported banks"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/bank",
+                    headers=self._get_headers(),
+                    timeout=30.0
+                )
+                data = response.json()
+                if response.status_code != 200:
+                    raise Exception(f"Failed to fetch banks: {data.get('message')}")
+                return data["data"]
+        except Exception as e:
+            logger.error(f"Paystack get_banks error: {str(e)}")
+            raise
+
+    async def resolve_account_number(self, account_number: str, bank_code: str) -> Dict[str, Any]:
+        """Verify account number and get account name"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/bank/resolve",
+                    params={"account_number": account_number, "bank_code": bank_code},
+                    headers=self._get_headers(),
+                    timeout=30.0
+                )
+                data = response.json()
+                if response.status_code != 200:
+                    raise Exception(f"Account resolution failed: {data.get('message')}")
+                return data["data"]
+        except Exception as e:
+            logger.error(f"Paystack resolve_account error: {str(e)}")
+            raise
+
+    async def create_transfer_recipient(
+        self, 
+        name: str, 
+        account_number: str, 
+        bank_code: str, 
+        currency: str = "NGN"
+    ) -> str:
+        """Create a transfer recipient (beneficiary)"""
+        try:
+            payload = {
+                "type": "nuban",
+                "name": name,
+                "account_number": account_number,
+                "bank_code": bank_code,
+                "currency": currency
+            }
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.base_url}/transferrecipient",
+                    json=payload,
+                    headers=self._get_headers(),
+                    timeout=30.0
+                )
+                data = response.json()
+                if response.status_code not in [200, 201]:
+                    raise Exception(f"Failed to create recipient: {data.get('message')}")
+                return data["data"]["recipient_code"]
+        except Exception as e:
+            logger.error(f"Paystack create_recipient error: {str(e)}")
+            raise
+
+    async def initiate_transfer(
+        self, 
+        amount: int, 
+        recipient_code: str, 
+        reference: str, 
+        reason: str = "Payout"
+    ) -> Dict[str, Any]:
+        """Initiate a transfer (payout)"""
+        try:
+            payload = {
+                "source": "balance",
+                "amount": amount,
+                "recipient": recipient_code,
+                "reference": reference,
+                "reason": reason
+            }
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.base_url}/transfer",
+                    json=payload,
+                    headers=self._get_headers(),
+                    timeout=30.0
+                )
+                data = response.json()
+                if response.status_code != 200:
+                    raise Exception(f"Transfer failed: {data.get('message')}")
+                return data["data"]
+        except Exception as e:
+            logger.error(f"Paystack initiate_transfer error: {str(e)}")
+            raise
 
 # Global instance
 paystack_service = PaystackService()

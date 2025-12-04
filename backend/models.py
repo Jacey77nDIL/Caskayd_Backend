@@ -182,8 +182,9 @@ class Transaction(Base):
     status = Column(SQLEnum(TransactionStatus), default=TransactionStatus.pending)
     
     # User information
-    user_id = Column(Integer, nullable=True)  # Could be creator or business
+    user_id = Column(Integer, nullable=True)  # Payer (Business)
     user_type = Column(String, nullable=True)  # 'creator' or 'business'
+    recipient_id = Column(Integer, nullable=True) # Payee (Creator)
     
     # Transaction details
     authorization_url = Column(Text, nullable=True)
@@ -219,7 +220,7 @@ class Campaign(Base):
     description = Column(Text, nullable=False)
 
     # --- 3. Change brief from Text to a file URL ---
-    brief = Column(Text, nullable=True) # Keep this for old data or simple text briefs
+    brief = Column(Text, nullable=True) 
     brief_file_url = Column(String(1024), nullable=True)
     # -----------------------------------------------
 
@@ -289,3 +290,83 @@ class TikTokCreatorSocial(Base):
         UniqueConstraint("user_id", "platform", name="uq_user_platform_tiktok"),
         Index("ix_tiktok_socials_open_id", "open_id"),
     )
+
+class InstagramAnalyticsHistory(Base):
+    """
+    Stores historical Instagram analytics snapshots for tracking trends.
+    """
+    __tablename__ = "instagram_analytics_history"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users_creators.id", ondelete="CASCADE"), nullable=False)
+    instagram_user_id = Column(String(64), nullable=False)
+    
+    # Analytics snapshot
+    followers_count = Column(Integer)
+    reach_7d = Column(Integer)
+    engagement_rate = Column(Float)
+    impressions_7d = Column(Integer)
+    profile_views_7d = Column(Integer)
+    website_clicks_7d = Column(Integer)
+    saves_7d = Column(Integer)
+    shares_7d = Column(Integer)
+    
+    # Metadata
+    recorded_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    
+    # Relationship back to the UserCreator
+    user = relationship("UserCreator", backref="instagram_analytics_history")
+
+    __table_args__ = (
+        Index("ix_analytics_history_user_date", "user_id", "recorded_at"),
+        Index("ix_analytics_history_user_ig_id", "user_id", "instagram_user_id"),
+    )
+
+class BankAccount(Base):
+    """
+    Stores creator's bank account details for payouts.
+    """
+    __tablename__ = "bank_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users_creators.id"), nullable=False, unique=True)
+    account_number = Column(String, nullable=False)
+    account_name = Column(String, nullable=False)
+    bank_code = Column(String, nullable=False)
+    bank_name = Column(String, nullable=False)
+    recipient_code = Column(String, nullable=True)  # Paystack recipient code (RCP_...)
+    currency = Column(String, default="NGN")
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user = relationship("UserCreator", backref="bank_account")
+
+class PayoutStatus(str, enum.Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    SUCCESS = "success"
+    FAILED = "failed"
+    REVERSED = "reversed"
+
+class Payout(Base):
+    """
+    Tracks payouts/transfers to creators.
+    """
+    __tablename__ = "payouts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users_creators.id"), nullable=False)
+    amount = Column(Float, nullable=False)  # Amount in Naira
+    reference = Column(String, unique=True, nullable=False, index=True)
+    status = Column(SQLEnum(PayoutStatus), default=PayoutStatus.PENDING)
+    
+    recipient_code = Column(String, nullable=False)
+    transfer_code = Column(String, nullable=True)  # Paystack transfer code (TRF_...)
+    
+    description = Column(String, nullable=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user = relationship("UserCreator", backref="payouts")
