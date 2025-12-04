@@ -1,22 +1,18 @@
-import os
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+import os
 
-# 1. Get the URL from Render
-database_url = os.getenv("DATABASE_URL")
 
-# 2. THE FIX: Force the URL to use the async driver
-# If the URL starts with 'postgres://' or 'postgresql://', switch it to 'postgresql+asyncpg://'
-if database_url:
-    if database_url.startswith("postgres://"):
-        database_url = database_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    elif database_url.startswith("postgresql://"):
-        database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# 3. Now create the engine with the FIXED url
-engine = create_async_engine(database_url, echo=True)
+if DATABASE_URL is None:
+    # This will fail the application with a clear error if the variable isn't set
+    raise RuntimeError(
+        "FATAL: The DATABASE_URL environment variable is missing. "
+        "Please ensure it is set on the Render dashboard."
+    )
 
-# ... rest of your code (SessionLocal, Base, etc.) ...
+engine = create_async_engine(DATABASE_URL, echo=True)
 SessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
 
