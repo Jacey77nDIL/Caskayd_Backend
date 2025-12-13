@@ -207,7 +207,7 @@ async def create_conversation(
         email = payload.get("sub")
         role = payload.get("role")
         
-        conversation_id = await ChatService.create_conversation(email, role, data, db)
+        conversation_id = await ChatService.ChatService.create_conversation(email, role, data, db)
         if not conversation_id:
             raise HTTPException(status_code=400, detail="Failed to create conversation")
             
@@ -227,7 +227,7 @@ async def get_conversations(
         email = payload.get("sub")
         role = payload.get("role")
         
-        conversations = await ChatService.get_conversations(email, role, db)
+        conversations = await ChatService.ChatService.get_conversations(email, role, db)
         return conversations
         
     except JWTError:
@@ -245,7 +245,7 @@ async def get_conversation_detail(
         email = payload.get("sub")
         role = payload.get("role")
         
-        conversation = await ChatService.get_conversation_detail(conversation_id, email, role, db)
+        conversation = await ChatService.ChatService.get_conversation_detail(conversation_id, email, role, db)
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
             
@@ -1681,3 +1681,129 @@ async def get_presigned_upload_url(
         raise HTTPException(status_code=401, detail="Invalid token")
     except ConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+
+# ============================================================================
+# Creator Account Details Endpoint
+# ============================================================================
+
+@app.post("/creator/submit-account")
+async def submit_account_details(
+    data: schemas.SubmitAccountRequest,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Creator submits their bank account details.
+    
+    Request body (JSON):
+    {
+        "account_name": "John Doe",
+        "account_number": "1234567890",
+        "bank_code": "011"
+    }
+    
+    Returns: { "id": 1, "account_number": "...", "account_name": "...", "bank_name": "...", "bank_code": "..." }
+    """
+    try:
+        # Decode JWT and get creator
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user, role = await auth.decode_user_id_from_jwt(payload, db)
+        
+        # Only creators can submit accounts
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can submit payment accounts")
+
+        # Extract from JSON body
+        account_name = data.account_name
+        account_number = data.account_number
+        bank_code = data.bank_code
+
+        # Validate inputs
+        if len(str(account_number)) != 10:
+            raise HTTPException(status_code=400, detail="Account number must be 10 digits")
+
+        # Get bank name from Paystack
+        banks = await paystack_service.get_banks()
+        bank_name = next((b["name"] for b in banks if b["code"] == bank_code), "Unknown Bank")
+
+        # Check if creator already has account
+        result = await db.execute(
+            select(models.BankAccount).where(models.BankAccount.user_id == user.id)
+        )
+        existing_account = result.scalar_one_or_none()
+
+        # Save or update account in database
+        if existing_account:
+            existing_account.account_number = account_number
+            existing_account.account_name = account_name
+            existing_account.bank_code = bank_code
+            existing_account.bank_name = bank_name
+            db.add(existing_account)
+        else:
+            new_account = models.BankAccount(
+                user_id=user.id,
+                account_number=account_number,
+                account_name=account_name,
+                bank_code=bank_code,
+                bank_name=bank_name,
+                recipient_code=""
+            )
+            db.add(new_account)
+
+        await db.commit()
+        
+        # Fetch the saved account
+        result = await db.execute(
+            select(models.BankAccount).where(models.BankAccount.user_id == user.id)
+        )
+        saved_account = result.scalar_one()
+        
+        return {
+            "id": saved_account.id,
+            "account_number": saved_account.account_number,
+            "account_name": saved_account.account_name,
+            "bank_name": saved_account.bank_name,
+            "bank_code": saved_account.bank_code,
+            "currency": saved_account.currency
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to save account: {str(e)}")
+
+
+@app.get("/creator/get-account", response_model=schemas.BankAccountResponse)
+async def get_account(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get creator's saved bank account details.
+    """
+    try:
+        # Decode JWT and get creator
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user, role = await auth.decode_user_id_from_jwt(payload, db)
+        
+        # Only creators can access accounts
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can access payment accounts")
+
+        # Get account from database
+        result = await db.execute(
+            select(models.BankAccount).where(models.BankAccount.user_id == user.id)
+        )
+        account = result.scalar_one_or_none()
+        
+        if not account:
+            raise HTTPException(status_code=404, detail="No account details found. Please submit your account first.")
+        
+        return account
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

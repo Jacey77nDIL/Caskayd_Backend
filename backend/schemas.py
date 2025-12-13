@@ -25,6 +25,11 @@ class Login(BaseModel):
     email: EmailStr
     password: str
 
+class SubmitAccountRequest(BaseModel):
+    account_name: str
+    account_number: str
+    bank_code: str
+
 class GoogleToken(BaseModel):
     token: str
 
