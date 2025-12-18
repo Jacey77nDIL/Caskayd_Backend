@@ -561,3 +561,13 @@ class PayoutResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+# --- Brief & Cloudflare Schemas ---
+
+# In schemas.py
+
+class PresignedUploadResponse(BaseModel):
+    upload_url: str  # The long URL with signature to PUT the file to
+    file_url: str    # The cleaner URL to save in the database
+    file_key: str    # The object key (path) in the bucket

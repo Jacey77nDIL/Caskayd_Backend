@@ -97,17 +97,13 @@ class RecommendationService:
             select(
                 UserCreator.id, 
                 func.count(creator_niches.c.niche_id).label('niche_match_count'),
-                InstagramCreatorSocial.followers_count,
-                InstagramCreatorSocial.engagement_rate
+                func.max(InstagramCreatorSocial.followers_count).label('followers_count'),
+                func.max(InstagramCreatorSocial.engagement_rate).label('engagement_rate')
             )
             .join(creator_niches, UserCreator.id == creator_niches.c.creator_id)
             .outerjoin(InstagramCreatorSocial, UserCreator.id == InstagramCreatorSocial.user_id)
             .where(creator_niches.c.niche_id.in_(relevant_niche_ids))
-            .group_by(
-                UserCreator.id, 
-                InstagramCreatorSocial.followers_count,
-                InstagramCreatorSocial.engagement_rate
-            )
+            .group_by(UserCreator.id)
         )
         
         # Apply search filter if provided

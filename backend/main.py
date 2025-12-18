@@ -1,12 +1,12 @@
+import asyncio
 from datetime import datetime, timezone
 import logging
 import uuid
-from fastapi import FastAPI, Depends, HTTPException, Request, Header, logger
+from fastapi import FastAPI, Depends, File, HTTPException, Request, Header, UploadFile, logger
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 import campaign_service
-import cloudflare_service
 from paystack_service import paystack_service
 from database import Base, get_db, engine
 import models, auth
@@ -33,10 +33,10 @@ from models import UserBusiness, Niche, Industry, UserCreator
 from sqlalchemy.orm import selectinload
 from typing import Optional, Dict, Any, List
 import uuid
-
+from auth import oauth2_scheme
 logger = logging.getLogger(__name__)
 app = FastAPI()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
 
 # Environment variables
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key")
@@ -90,6 +90,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include routers
+
+
 @app.on_event("startup")
 async def create_tables():
     async with engine.begin() as conn:
@@ -1657,36 +1661,6 @@ async def handle_tiktok_auth_callback(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
     
 
-@app.post("/uploads/presigned-url")
-async def get_presigned_upload_url(
-    data: schemas.PresignedUrlRequest,
-    token: str = Depends(oauth2_scheme) # Protect the endpoint
-):
-    """
-    Generates a presigned URL for the client to upload a file to Cloudflare R2.
-    """
-    try:
-        # Just ensure the user is logged in
-        jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        
-        result = cloudflare_service.generate_presigned_upload_url(
-            file_name=data.file_name,
-            file_type=data.file_type
-        )
-        if not result:
-            raise HTTPException(status_code=500, detail="Could not generate upload URL.")
-            
-        return result
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    except ConnectionError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-
-
-# ============================================================================
-# Creator Account Details Endpoint
-# ============================================================================
-
 @app.post("/creator/submit-account")
 async def submit_account_details(
     data: schemas.SubmitAccountRequest,
@@ -1807,3 +1781,37 @@ async def get_account(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+import cloudinary
+import cloudinary.uploader
+
+# 1. Config (Get these from Cloudinary Dashboard)
+cloudinary.config(
+    cloud_name = "dl9ivegqt",
+    api_key = "751524673254932",
+    api_secret = "627qOe84JLkP_7XPS3vLEaFl8xs"
+)
+
+@app.post("/chat/upload")
+async def upload_file(file: UploadFile = File(...),
+                      token: str = Depends(oauth2_scheme),
+                      db: AsyncSession = Depends(get_db)):
+    try:
+        # Decode JWT and get creator
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user, role = await auth.decode_user_id_from_jwt(payload, db)
+        result = cloudinary.uploader.upload(file.file, folder="chat_images")
+ 
+        return {
+        "url": result.get("secure_url"),
+        "type": result.get("resource_type")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+# @app.get("/chat/download")
+# async def download_file(file_url: str):
+
