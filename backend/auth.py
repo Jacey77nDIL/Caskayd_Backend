@@ -6,7 +6,8 @@ from jose import JWTError, jwt
 import os
 from google.oauth2 import id_token
 from google.auth.transport import requests
-
+from fastapi.security import OAuth2PasswordBearer
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
