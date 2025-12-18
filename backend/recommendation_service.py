@@ -118,19 +118,12 @@ class RecommendationService:
         if filters:
             query = await self._apply_filters(query, filters)
         
-        # Order by: search relevance (if search), niche matches, then by recency, with viewed creators last
-        if search_query:
-            # Prioritize exact name matches, then partial matches
-            query = query.order_by(
-                desc(func.similarity(UserCreator.name, search_query)),
-                desc(text('niche_match_count')),
-                desc(UserCreator.created_at)
-            )
-        else:
-            query = query.order_by(
-                desc(text('niche_match_count')),
-                desc(UserCreator.created_at)
-            )
+        # Order by: niche matches first, then by recency
+        # Note: Removed similarity() function as it requires pg_trgm extension
+        query = query.order_by(
+            desc(text('niche_match_count')),
+            desc(UserCreator.created_at)
+        )
         
         # Execute query in batches to avoid overwhelming the database
         fresh_creator_ids = []
