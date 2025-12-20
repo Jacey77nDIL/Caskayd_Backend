@@ -383,6 +383,199 @@ class CampaignService:
         }
     
     @staticmethod
+    async def send_brief_file_to_creators(
+        campaign_id: int,
+        business_id: int,
+        brief_url: str,
+        file_name: str,
+        db: AsyncSession
+    ) -> dict:
+        """Send campaign brief file to all creators in campaign via chat"""
+        # Get campaign with creators
+        campaign_result = await db.execute(
+            select(Campaign)
+            .options(selectinload(Campaign.campaign_creators).selectinload(CampaignCreator.creator))
+            .options(selectinload(Campaign.business))
+            .where(and_(
+                Campaign.id == campaign_id,
+                Campaign.business_id == business_id
+            ))
+        )
+        campaign = campaign_result.scalar()
+        
+        if not campaign:
+            return {"success": False, "message": "Campaign not found"}
+        
+        sent_count = 0
+        failed_count = 0
+        
+        # Build brief message with file link
+        brief_message = f"""
+📋 Campaign Brief Uploaded
+
+📄 Brief File: {file_name}
+🔗 Download: {brief_url}
+
+Campaign: {campaign.title}
+"""
+        
+        if campaign.description:
+            brief_message += f"\nDescription: {campaign.description}"
+        
+        if campaign.budget:
+            brief_message += f"\n💰 Budget: ${campaign.budget:,.2f}"
+        
+        if campaign.start_date and campaign.end_date:
+            brief_message += f"\n📅 Period: {campaign.start_date.strftime('%Y-%m-%d')} to {campaign.end_date.strftime('%Y-%m-%d')}"
+        
+        # Send to each creator that is invited
+        for cc in campaign.campaign_creators:
+            if cc.status != CreatorCampaignStatus.INVITED:
+                continue
+            
+            try:
+                # Check if conversation exists
+                existing_conv_result = await db.execute(
+                    select(Conversation).where(and_(
+                        Conversation.creator_id == cc.creator_id,
+                        Conversation.business_id == business_id,
+                        Conversation.is_active == True
+                    ))
+                )
+                conversation = existing_conv_result.scalar()
+                
+                # Create conversation if it doesn't exist
+                if not conversation:
+                    conversation = Conversation(
+                        creator_id=cc.creator_id,
+                        business_id=business_id
+                    )
+                    db.add(conversation)
+                    await db.flush()
+                
+                # Send message
+                message = Message(
+                    conversation_id=conversation.id,
+                    sender_type="business",
+                    sender_id=business_id,
+                    content=brief_message,
+                    file_url=brief_url,
+                    file_type=file_name.split('.')[-1].upper() if '.' in file_name else 'FILE'
+                )
+                db.add(message)
+                
+                conversation.updated_at = func.now()
+                sent_count += 1
+                
+            except Exception as e:
+                logger.error(f"Failed to send brief to creator {cc.creator_id}: {e}")
+                failed_count += 1
+        
+        await db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Brief sent to {sent_count} creator(s)",
+            "sent_count": sent_count,
+            "failed_count": failed_count
+        }
+    
+    @staticmethod
+    async def send_brief_file_to_new_creators(
+        campaign_id: int,
+        business_id: int,
+        creator_ids: List[int],
+        brief_url: str,
+        file_name: str,
+        db: AsyncSession
+    ) -> dict:
+        """Send campaign brief file to specific newly added creators"""
+        # Get campaign
+        campaign_result = await db.execute(
+            select(Campaign)
+            .options(selectinload(Campaign.business))
+            .where(and_(
+                Campaign.id == campaign_id,
+                Campaign.business_id == business_id
+            ))
+        )
+        campaign = campaign_result.scalar()
+        
+        if not campaign:
+            return {"success": False, "message": "Campaign not found"}
+        
+        sent_count = 0
+        failed_count = 0
+        
+        # Build brief message with file link
+        brief_message = f"""
+📋 Campaign Brief
+
+📄 Brief File: {file_name}
+🔗 Download: {brief_url}
+
+Campaign: {campaign.title}
+"""
+        
+        if campaign.description:
+            brief_message += f"\nDescription: {campaign.description}"
+        
+        if campaign.budget:
+            brief_message += f"\n💰 Budget: ${campaign.budget:,.2f}"
+        
+        if campaign.start_date and campaign.end_date:
+            brief_message += f"\n📅 Period: {campaign.start_date.strftime('%Y-%m-%d')} to {campaign.end_date.strftime('%Y-%m-%d')}"
+        
+        # Send to each specified creator
+        for creator_id in creator_ids:
+            try:
+                # Check if conversation exists
+                existing_conv_result = await db.execute(
+                    select(Conversation).where(and_(
+                        Conversation.creator_id == creator_id,
+                        Conversation.business_id == business_id,
+                        Conversation.is_active == True
+                    ))
+                )
+                conversation = existing_conv_result.scalar()
+                
+                # Create conversation if it doesn't exist
+                if not conversation:
+                    conversation = Conversation(
+                        creator_id=creator_id,
+                        business_id=business_id
+                    )
+                    db.add(conversation)
+                    await db.flush()
+                
+                # Send message
+                message = Message(
+                    conversation_id=conversation.id,
+                    sender_type="business",
+                    sender_id=business_id,
+                    content=brief_message,
+                    file_url=brief_url,
+                    file_type=file_name.split('.')[-1].upper() if '.' in file_name else 'FILE'
+                )
+                db.add(message)
+                
+                conversation.updated_at = func.now()
+                sent_count += 1
+                
+            except Exception as e:
+                logger.error(f"Failed to send brief to creator {creator_id}: {e}")
+                failed_count += 1
+        
+        await db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Brief sent to {sent_count} creator(s)",
+            "sent_count": sent_count,
+            "failed_count": failed_count
+        }
+    
+    @staticmethod
     async def delete_campaign(
         campaign_id: int,
         business_id: int,
@@ -403,6 +596,95 @@ class CampaignService:
         await db.delete(campaign)
         await db.commit()
         return True
+    
+    @staticmethod
+    async def accept_campaign(
+        campaign_id: int,
+        creator_id: int,
+        db: AsyncSession
+    ) -> Optional[CampaignCreator]:
+        """Accept a campaign invitation"""
+        result = await db.execute(
+            select(CampaignCreator).where(and_(
+                CampaignCreator.campaign_id == campaign_id,
+                CampaignCreator.creator_id == creator_id,
+                CampaignCreator.status == CreatorCampaignStatus.INVITED
+            ))
+        )
+        campaign_creator = result.scalar()
+        
+        if not campaign_creator:
+            return None
+        
+        campaign_creator.status = CreatorCampaignStatus.ACCEPTED
+        campaign_creator.responded_at = datetime.utcnow()
+        
+        await db.commit()
+        await db.refresh(campaign_creator)
+        return campaign_creator
+    
+    @staticmethod
+    async def decline_campaign(
+        campaign_id: int,
+        creator_id: int,
+        db: AsyncSession
+    ) -> Optional[CampaignCreator]:
+        """Decline a campaign invitation"""
+        result = await db.execute(
+            select(CampaignCreator).where(and_(
+                CampaignCreator.campaign_id == campaign_id,
+                CampaignCreator.creator_id == creator_id,
+                CampaignCreator.status == CreatorCampaignStatus.INVITED
+            ))
+        )
+        campaign_creator = result.scalar()
+        
+        if not campaign_creator:
+            return None
+        
+        campaign_creator.status = CreatorCampaignStatus.DECLINED
+        campaign_creator.responded_at = datetime.utcnow()
+        
+        await db.commit()
+        await db.refresh(campaign_creator)
+        return campaign_creator
+    
+    @staticmethod
+    async def get_creator_campaign_invitations(
+        creator_id: int,
+        db: AsyncSession,
+        status: Optional[str] = None
+    ) -> List[dict]:
+        """Get all campaign invitations for a creator"""
+        query = select(CampaignCreator).where(CampaignCreator.creator_id == creator_id)
+        
+        if status:
+            query = query.where(CampaignCreator.status == status)
+        
+        query = query.order_by(desc(CampaignCreator.invited_at))
+        
+        result = await db.execute(
+            query.options(selectinload(CampaignCreator.campaign).selectinload(Campaign.business))
+        )
+        campaign_creators = result.scalars().all()
+        
+        invitations = []
+        for cc in campaign_creators:
+            invitations.append({
+                'id': cc.id,
+                'campaign_id': cc.campaign_id,
+                'campaign_title': cc.campaign.title,
+                'campaign_description': cc.campaign.description,
+                'campaign_budget': cc.campaign.budget,
+                'campaign_start_date': cc.campaign.start_date,
+                'campaign_end_date': cc.campaign.end_date,
+                'business_name': cc.campaign.business.business_name,
+                'status': cc.status,
+                'invited_at': cc.invited_at,
+                'responded_at': cc.responded_at
+            })
+        
+        return invitations
   
 
 # Global instance

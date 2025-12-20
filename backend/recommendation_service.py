@@ -161,6 +161,16 @@ class RecommendationService:
             niche_ids = filters['niches']
             query = query.where(creator_niches.c.niche_id.in_(niche_ids))
         
+        if 'socials' in filters and filters['socials']:
+            
+            social_platforms = filters['socials']
+            if isinstance(social_platforms, str):
+                social_platforms = [social_platforms]
+            for platform in social_platforms:
+                query = query.where(
+                    UserCreator.socials[platform].astext.isnot(None)
+                )
+            
         return query
     
     async def _get_creators_by_ids(self, creator_ids: List[int], db: AsyncSession) -> List[Dict]:
