@@ -19,12 +19,11 @@ from fastapi import WebSocket, WebSocketDisconnect
 import tiktok_service
 from websocket_ import manager
 from sqlalchemy.future import select
-from models import Conversation
+from models import Conversation, InstagramCreatorSocial
 from sqlalchemy.orm import selectinload
 from models import UserCreator
 from sqlalchemy.future import select
 from passlib.context import CryptContext
-from instagram_creator_socials import InstagramCreatorSocial, exchange_token_and_upsert_insights
 import requests
 import schemas
 from fastapi import Query
@@ -381,6 +380,7 @@ async def get_creator_recommendations(
     max_followers: Optional[int] = Query(None, description="Maximum follower count"),
     engagement_rate: Optional[float] = Query(None, description="Minimum engagement rate (as percentage, e.g., 4.5)"),
     niches: Optional[str] = Query(None, description="Comma-separated niche IDs"),
+    socials: Optional[str] = Query(None, description="Comma-separated social platforms (e.g., instagram,tiktok)"),
     offset: int = Query(0, description="Pagination offset", ge=0),
     limit: int = Query(5, description="Number of results to return", ge=1, le=20),
     token: str = Depends(oauth2_scheme),
@@ -420,6 +420,12 @@ async def get_creator_recommendations(
                 filters['niches'] = niche_ids
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid niche IDs format")
+        if socials:
+            try:
+                social_platforms = [platform.strip().lower() for platform in socials.split(',')]
+                filters['socials'] = social_platforms
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid social platforms format")
         
         recommendations = await recommendation_service.get_recommendations(
             business_id=business.id,
@@ -566,7 +572,6 @@ async def get_available_industries(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
 @app.get("/recommendations/stats")
 async def get_recommendation_stats(
     token: str = Depends(oauth2_scheme),
@@ -1439,7 +1444,7 @@ async def add_creators_to_campaign_endpoint(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db)
 ):
-    """Add creators to a campaign"""
+    """Add creators to a campaign and send existing brief if available"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
@@ -1461,10 +1466,30 @@ async def add_creators_to_campaign_endpoint(
             campaign_id, business.id, data.creator_ids, data.notes, db
         )
         
+        # Send existing brief to newly added creators if it exists
+        from models import Campaign
+        campaign_result = await db.execute(
+            select(Campaign).where(Campaign.id == campaign_id)
+        )
+        campaign = campaign_result.scalar()
+        
+        brief_sent_count = 0
+        if campaign and campaign.brief_file_url:
+            # Extract filename from URL or use generic name
+            file_name = campaign.brief_file_url.split('/')[-1] if '/' in campaign.brief_file_url else 'campaign_brief'
+            send_result = await campaign_service.campaign_service.send_brief_file_to_new_creators(
+                campaign_id, business.id, [c.creator_id for c in added_creators], 
+                campaign.brief_file_url, file_name, db
+            )
+            brief_sent_count = send_result.get("sent_count", 0)
+        
         return {
             "success": True,
             "message": f"Added {len(added_creators)} creator(s) to campaign",
-            "added_count": len(added_creators)
+            "data": {
+                "added_count": len(added_creators),
+                "brief_sent_count": brief_sent_count
+            }
         }
         
     except JWTError:
@@ -1585,6 +1610,151 @@ async def delete_campaign_endpoint(
         return {
             "success": True,
             "message": "Campaign deleted successfully"
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+    
+
+@app.post("/campaigns/{campaign_id}/accept")
+async def accept_campaign(
+    campaign_id: int,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Accept a campaign invitation (Creator endpoint)"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can accept campaigns")
+        
+        # Get creator
+        creator_result = await db.execute(
+            select(UserCreator).where(UserCreator.email == email)
+        )
+        creator = creator_result.scalar()
+        
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+        
+        campaign_creator = await campaign_service.campaign_service.accept_campaign(
+            campaign_id, creator.id, db
+        )
+        
+        if not campaign_creator:
+            raise HTTPException(
+                status_code=404, 
+                detail="Campaign invitation not found or already responded"
+            )
+        
+        return {
+            "success": True,
+            "message": "Campaign accepted successfully",
+            "data": {
+                "campaign_id": campaign_id,
+                "creator_id": creator.id,
+                "status": campaign_creator.status,
+                "responded_at": campaign_creator.responded_at
+            }
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/campaigns/{campaign_id}/decline")
+async def decline_campaign(
+    campaign_id: int,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Decline a campaign invitation (Creator endpoint)"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can decline campaigns")
+        
+        # Get creator
+        creator_result = await db.execute(
+            select(UserCreator).where(UserCreator.email == email)
+        )
+        creator = creator_result.scalar()
+        
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+        
+        campaign_creator = await campaign_service.campaign_service.decline_campaign(
+            campaign_id, creator.id, db
+        )
+        
+        if not campaign_creator:
+            raise HTTPException(
+                status_code=404, 
+                detail="Campaign invitation not found or already responded"
+            )
+        
+        return {
+            "success": True,
+            "message": "Campaign declined successfully",
+            "data": {
+                "campaign_id": campaign_id,
+                "creator_id": creator.id,
+                "status": campaign_creator.status,
+                "responded_at": campaign_creator.responded_at
+            }
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/campaigns/invitations")
+async def get_campaign_invitations(
+    status: Optional[str] = Query(None, description="Filter by status (invited, accepted, declined)"),
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all campaign invitations for the authenticated creator"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can view invitations")
+        
+        # Get creator
+        creator_result = await db.execute(
+            select(UserCreator).where(UserCreator.email == email)
+        )
+        creator = creator_result.scalar()
+        
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+        
+        invitations = await campaign_service.campaign_service.get_creator_campaign_invitations(
+            creator.id, db, status
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "invitations": invitations,
+                "count": len(invitations)
+            },
+            "message": f"Found {len(invitations)} campaign invitation(s)"
         }
         
     except JWTError:
@@ -1788,9 +1958,9 @@ import cloudinary.uploader
 
 # 1. Config (Get these from Cloudinary Dashboard)
 cloudinary.config(
-    cloud_name = "dl9ivegqt",
-    api_key = "751524673254932",
-    api_secret = "627qOe84JLkP_7XPS3vLEaFl8xs"
+    cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key = os.getenv("CLOUDINARY_API_KEY"),
+    api_secret = os.getenv("CLOUDINARY_API_SECRET"),
 )
 
 @app.post("/chat/upload")
@@ -1812,6 +1982,235 @@ async def upload_file(file: UploadFile = File(...),
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-# @app.get("/chat/download")
-# async def download_file(file_url: str):
+
+@app.post("/upload/creator-profile-picture")
+async def upload_creator_profile_picture(
+    file: UploadFile = File(...),
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload a profile picture for a creator"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can upload profile pictures")
+        
+        # Get creator
+        creator_result = await db.execute(
+            select(UserCreator).where(UserCreator.email == email)
+        )
+        creator = creator_result.scalar()
+        
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+        
+        # Upload to Cloudinary
+        result = cloudinary.uploader.upload(
+            file.file,
+            folder=f"creator_profiles/creator_{creator.id}",
+            resource_type="auto"
+        )
+        
+        # Update creator profile_image
+        creator.profile_image = result.get("secure_url")
+        await db.commit()
+        
+        return {
+            "success": True,
+            "message": "Profile picture uploaded successfully",
+            "data": {
+                "creator_id": creator.id,
+                "profile_picture_url": result.get("secure_url"),
+                "file_name": file.filename,
+                "uploaded_at": datetime.utcnow().isoformat()
+            }
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/upload/campaign-image")
+async def upload_campaign_image(
+    campaign_id: int,
+    file: UploadFile = File(...),
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload an image for a campaign"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can upload campaign images")
+        
+        # Get business
+        business_result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        business = business_result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+        
+        # Verify campaign belongs to business
+        from models import Campaign
+        campaign_result = await db.execute(
+            select(Campaign).where(
+                and_(Campaign.id == campaign_id, Campaign.business_id == business.id)
+            )
+        )
+        campaign = campaign_result.scalar()
+        
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        
+        # Upload to Cloudinary
+        result = cloudinary.uploader.upload(
+            file.file,
+            folder=f"campaigns/campaign_{campaign_id}",
+            resource_type="auto"
+        )
+        
+        return {
+            "success": True,
+            "message": "Campaign image uploaded successfully",
+            "data": {
+                "campaign_id": campaign_id,
+                "image_url": result.get("secure_url"),
+                "file_name": file.filename,
+                "uploaded_at": datetime.utcnow().isoformat()
+            }
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/upload/campaign-brief")
+async def upload_campaign_brief(
+    campaign_id: int,
+    file: UploadFile = File(...),
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload a brief file for a campaign and send it to all added creators"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can upload briefs")
+        
+        # Get business
+        business_result = await db.execute(
+            select(UserBusiness).where(UserBusiness.email == email)
+        )
+        business = business_result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+        
+        # Verify campaign belongs to business
+        from models import Campaign
+        campaign_result = await db.execute(
+            select(Campaign).where(
+                and_(Campaign.id == campaign_id, Campaign.business_id == business.id)
+            )
+        )
+        campaign = campaign_result.scalar()
+        
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        
+        # Upload to Cloudinary
+        result = cloudinary.uploader.upload(
+            file.file,
+            folder=f"campaign_briefs/campaign_{campaign_id}",
+            resource_type="auto"
+        )
+        
+        # Update campaign brief_file_url
+        campaign.brief_file_url = result.get("secure_url")
+        await db.commit()
+        
+        # Send brief to all creators in the campaign
+        send_result = await campaign_service.campaign_service.send_brief_file_to_creators(
+            campaign_id, business.id, result.get("secure_url"), file.filename, db
+        )
+        
+        return {
+            "success": True,
+            "message": "Brief uploaded successfully and sent to creators",
+            "data": {
+                "campaign_id": campaign_id,
+                "brief_url": result.get("secure_url"),
+                "file_name": file.filename,
+                "file_size": result.get("bytes"),
+                "creators_notified": send_result.get("sent_count", 0),
+                "upload_date": datetime.utcnow().isoformat()
+            }
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/creator/profile/{creator_id}")
+async def get_creator_profile_with_picture(
+    creator_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get creator profile with picture"""
+    try:
+        creator_result = await db.execute(
+            select(UserCreator)
+            .options(selectinload(UserCreator.niches))
+            .where(UserCreator.id == creator_id)
+        )
+        creator = creator_result.scalar()
+        
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+        
+        return {
+            "success": True,
+            "data": {
+                "id": creator.id,
+                "name": creator.name,
+                "email": creator.email,
+                "bio": creator.bio,
+                "location": creator.location,
+                "profile_picture": creator.profile_image,
+                "followers_count": creator.followers_count,
+                "engagement_rate": creator.engagement_rate,
+                "niches": [{"id": niche.id, "name": niche.name} for niche in creator.niches],
+                "created_at": creator.created_at.isoformat() if creator.created_at else None
+            },
+            "message": "Creator profile retrieved successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
