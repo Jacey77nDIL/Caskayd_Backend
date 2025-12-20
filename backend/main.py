@@ -1361,6 +1361,48 @@ async def get_campaigns_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+@app.get("/campaigns/invitations")
+async def get_campaign_invitations(
+    status: Optional[str] = Query(None, description="Filter by status (invited, accepted, declined)"),
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all campaign invitations for the authenticated creator"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can view invitations")
+        
+        # Get creator
+        creator_result = await db.execute(
+            select(UserCreator).where(UserCreator.email == email)
+        )
+        creator = creator_result.scalar()
+        
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+        
+        invitations = await campaign_service.campaign_service.get_creator_campaign_invitations(
+            creator.id, db, status
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "invitations": invitations,
+                "count": len(invitations)
+            },
+            "message": f"Found {len(invitations)} campaign invitation(s)"
+        }
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 @app.get("/campaigns/{campaign_id}", response_model=schemas.CampaignResponse)
 async def get_campaign_detail_endpoint(
     campaign_id: int,
@@ -1719,49 +1761,6 @@ async def decline_campaign(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-
-@app.get("/campaigns/invitations")
-async def get_campaign_invitations(
-    status: Optional[str] = Query(None, description="Filter by status (invited, accepted, declined)"),
-    token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get all campaign invitations for the authenticated creator"""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email = payload.get("sub")
-        role = payload.get("role")
-        
-        if role != "creator":
-            raise HTTPException(status_code=403, detail="Only creators can view invitations")
-        
-        # Get creator
-        creator_result = await db.execute(
-            select(UserCreator).where(UserCreator.email == email)
-        )
-        creator = creator_result.scalar()
-        
-        if not creator:
-            raise HTTPException(status_code=404, detail="Creator not found")
-        
-        invitations = await campaign_service.campaign_service.get_creator_campaign_invitations(
-            creator.id, db, status
-        )
-        
-        return {
-            "success": True,
-            "data": {
-                "invitations": invitations,
-                "count": len(invitations)
-            },
-            "message": f"Found {len(invitations)} campaign invitation(s)"
-        }
-        
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-    
 
 @app.get("/auth/tiktok/start", response_model=schemas.TikTokAuthUrlResponse)
 async def start_tiktok_auth(token: str = Depends(oauth2_scheme)):
