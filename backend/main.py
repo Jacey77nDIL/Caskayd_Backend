@@ -1401,7 +1401,7 @@ async def get_campaign_detail_endpoint(
         if not business:
             raise HTTPException(status_code=404, detail="Business not found")
         
-        campaign = await campaign_service.get_campaign_detail(campaign_id, business.id, db)
+        campaign = await campaign_service.campaign_service.get_campaign_detail(campaign_id, business.id, db)
         
         if not campaign:
             raise HTTPException(status_code=404, detail="Campaign not found")
