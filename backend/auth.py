@@ -45,7 +45,9 @@ async def signup_creator(data, db: AsyncSession):
     user = UserCreator(
         category=data.category,
         email=data.email,
-        password_hash=hashed
+        password_hash=hashed,
+        bio=data.bio,
+        name=data.name
     )
     db.add(user)
     await db.commit()

@@ -5,15 +5,124 @@ Simple endpoint for creators to submit their account details for payment collect
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from database import get_db
 from auth import oauth2_scheme, decode_user_id_from_jwt, SECRET_KEY, ALGORITHM
 from jose import jwt
-from models import UserCreator, BankAccount
-from schemas import BankAccountCreate, BankAccountResponse
+from models import UserCreator, BankAccount, Niche
+from schemas import BankAccountCreate, BankAccountResponse, CreatorCurrentUserResponse, CreatorProfileUpdate
 from paystack_service import paystack_service
 
 router = APIRouter(prefix="/api/creator", tags=["Creator"])
+
+
+@router.get("/me", response_model=CreatorCurrentUserResponse)
+async def get_current_creator(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get the current logged-in creator's full profile with id, email, name, profile image, niches, and socials.
+    This is useful for getting the creator_id to fetch creator-specific images.
+    """
+    try:
+        # Decode JWT and get creator
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user, role = await decode_user_id_from_jwt(payload, db)
+        
+        # Only creators can access this endpoint
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can access this endpoint")
+        
+        # Fetch creator with relationships loaded
+        result = await db.execute(
+            select(UserCreator)
+            .options(selectinload(UserCreator.niches))
+            .options(selectinload(UserCreator.socials))
+            .where(UserCreator.id == user.id)
+        )
+        creator = result.scalar_one_or_none()
+        
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+        
+        return creator
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch creator: {str(e)}")
+
+
+@router.put("/profile", response_model=CreatorCurrentUserResponse)
+async def update_creator_profile(
+    data: CreatorProfileUpdate,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update creator profile details like bio, location, profile image, followers count, engagement rate, and niches.
+    This allows creators to update their profile information after initial sign-up.
+    """
+    try:
+        # Decode JWT and get creator
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user, role = await decode_user_id_from_jwt(payload, db)
+        
+        # Only creators can access this endpoint
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can access this endpoint")
+        
+        # Fetch creator
+        result = await db.execute(
+            select(UserCreator)
+            .options(selectinload(UserCreator.niches))
+            .options(selectinload(UserCreator.socials))
+            .where(UserCreator.id == user.id)
+        )
+        creator = result.scalar_one_or_none()
+        
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+        
+        # Update fields if provided
+        if data.name is not None:
+            creator.name = data.name
+        if data.bio is not None:
+            creator.bio = data.bio
+        if data.location is not None:
+            creator.location = data.location
+        if data.profile_image is not None:
+            creator.profile_image = data.profile_image
+        if data.followers_count is not None:
+            creator.followers_count = data.followers_count
+        if data.engagement_rate is not None:
+            creator.engagement_rate = data.engagement_rate
+        
+        # Update niches if provided
+        if data.niche_ids is not None:
+            # Clear existing niches
+            creator.niches.clear()
+            # Add new niches
+            if data.niche_ids:
+                niches_result = await db.execute(
+                    select(Niche).where(Niche.id.in_(data.niche_ids))
+                )
+                niches = niches_result.scalars().all()
+                for niche in niches:
+                    creator.niches.append(niche)
+        
+        await db.commit()
+        await db.refresh(creator, ["niches", "socials"])
+        
+        return creator
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to update profile: {str(e)}")
 
 
 @router.post("/submit-account", response_model=BankAccountResponse)
