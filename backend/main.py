@@ -937,32 +937,6 @@ async def get_available_industries(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@app.get("/creator/profile")
-async def get_creator_profile(db: AsyncSession = Depends(get_db)):
-     try:
-        result = await db.execute(
-            select(UserCreator)
-            .order_by(UserCreator.name)
-        )
-        creators = result.scalars().all()
-        
-        return {
-            "success": True,
-            "data": {
-                "creators": [
-                    {
-                        "id": creator.id,
-                        "name": creator.name,
-                    } for creator in creators
-                ]
-            },
-            "message": f"Found {len(creators)} available industries"
-        }
-        
-     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
 @app.post("/payments/initialize")
 async def initialize_payment(
     payment_data: schemas.PaymentInitialize,
@@ -2173,17 +2147,24 @@ async def upload_campaign_brief(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@app.get("/creator/profile/{creator_id}")
+@app.get("/creator/profile")
 async def get_creator_profile_with_picture(
-    creator_id: int,
+    token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get creator profile with picture"""
+    """Get current creator's profile with picture"""
     try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can view their profile")
+        
         creator_result = await db.execute(
             select(UserCreator)
             .options(selectinload(UserCreator.niches))
-            .where(UserCreator.id == creator_id)
+            .where(UserCreator.email == email)
         )
         creator = creator_result.scalar()
         
@@ -2207,6 +2188,8 @@ async def get_creator_profile_with_picture(
             "message": "Creator profile retrieved successfully"
         }
         
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
     except HTTPException:
         raise
     except Exception as e:
