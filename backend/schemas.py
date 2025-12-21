@@ -100,6 +100,51 @@ class CreatorProfileSetup(BaseModel):
     profile_image: Optional[str] = None
     niche_ids: List[int] = []
 
+class NicheResponse(BaseModel):
+    id: int
+    name: str
+    
+    class Config:
+        from_attributes = True
+
+class InstagramSocialResponse(BaseModel):
+    id: int
+    instagram_user_id: Optional[str] = None
+    instagram_username: Optional[str] = None
+    followers_count: Optional[int] = None
+    engagement_rate: Optional[float] = None
+    
+    class Config:
+        from_attributes = True
+
+class CreatorCurrentUserResponse(BaseModel):
+    id: int
+    email: str
+    name: str
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    profile_image: Optional[str] = None
+    followers_count: Optional[int] = None
+    engagement_rate: Optional[float] = None
+    category: str
+    niches: List[NicheResponse] = []
+    socials: List[InstagramSocialResponse] = []
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class CreatorProfileUpdate(BaseModel):
+    """Schema for updating creator profile details after sign-up"""
+    name: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    profile_image: Optional[str] = None
+    followers_count: Optional[int] = None
+    engagement_rate: Optional[float] = None
+    niche_ids: Optional[List[int]] = None
+
 from pydantic import BaseModel
 from typing import Optional
 
@@ -142,6 +187,7 @@ class CampaignCreate(BaseModel):
     description: str
     brief: Optional[str] = None
     brief_file_url: Optional[str] = None
+    campaign_image: Optional[str] = None
     budget: Optional[float] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
@@ -151,6 +197,7 @@ class CampaignUpdate(BaseModel):
     description: Optional[str] = None
     brief: Optional[str] = None
     brief_file_url: Optional[str] = None
+    campaign_image: Optional[str] = None
     budget: Optional[float] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
@@ -346,6 +393,7 @@ class CampaignUpdate(BaseModel):
     description: Optional[str] = None
     brief: Optional[str] = None
     brief_file_url: Optional[str] = None
+    campaign_image: Optional[str] = None
     budget: Optional[float] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
@@ -378,6 +426,8 @@ class CampaignResponse(BaseModel):
     title: str
     description: str
     brief: Optional[str] = None
+    brief_file_url: Optional[str] = None
+    campaign_image: Optional[str] = None
     budget: Optional[float] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None

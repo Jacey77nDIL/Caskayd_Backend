@@ -224,6 +224,7 @@ class Campaign(Base):
     brief_file_url = Column(String(1024), nullable=True)
     # -----------------------------------------------
 
+    campaign_image = Column(String(1024), nullable=True)  # Campaign image URL
     budget = Column(Float, nullable=True)
     start_date = Column(DateTime(timezone=True), nullable=True)
     end_date = Column(DateTime(timezone=True), nullable=True)

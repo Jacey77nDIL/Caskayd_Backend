@@ -46,6 +46,7 @@ class CampaignService:
         description=data.description,
         brief=data.brief,
         brief_file_url=data.brief_file_url, # <-- ADD THIS
+        campaign_image=data.campaign_image,
         budget=data.budget,
         start_date=data.start_date,
         end_date=data.end_date,
@@ -135,6 +136,8 @@ class CampaignService:
             title=campaign.title,
             description=campaign.description,
             brief=campaign.brief,
+            brief_file_url=campaign.brief_file_url,
+            campaign_image=campaign.campaign_image,
             budget=campaign.budget,
             start_date=campaign.start_date,
             end_date=campaign.end_date,
@@ -182,7 +185,9 @@ class CampaignService:
         if data.brief is not None:
             campaign.brief = data.brief
         if data.brief_file_url is not None:
-            campaign.brief_file_url = data.brief_file_url 
+            campaign.brief_file_url = data.brief_file_url
+        if data.campaign_image is not None:
+            campaign.campaign_image = data.campaign_image
         if data.budget is not None:
             campaign.budget = data.budget
         
@@ -319,6 +324,9 @@ class CampaignService:
 📋 BRIEF:
 {campaign.brief}
 """
+        
+        if campaign.campaign_image:
+            brief_message += f"\n🖼️ Campaign Image: {campaign.campaign_image}"
         
         if campaign.budget:
             brief_message += f"\n💰 Budget: ${campaign.budget:,.2f}"
@@ -675,6 +683,7 @@ Campaign: {campaign.title}
                 'campaign_id': cc.campaign_id,
                 'campaign_title': cc.campaign.title,
                 'campaign_description': cc.campaign.description,
+                'campaign_image': cc.campaign.campaign_image,
                 'campaign_budget': cc.campaign.budget,
                 'campaign_start_date': cc.campaign.start_date,
                 'campaign_end_date': cc.campaign.end_date,
