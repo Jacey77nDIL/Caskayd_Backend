@@ -384,6 +384,7 @@ class CampaignCreate(BaseModel):
     description: str
     brief: Optional[str] = None
     brief_file_url: Optional[str] = None
+    campaign_image: Optional[str] = None
     budget: Optional[float] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None

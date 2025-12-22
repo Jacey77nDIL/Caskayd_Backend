@@ -1260,6 +1260,7 @@ async def create_campaign(
             brief=data.brief,
             brief_file_url=data.brief_file_url,
             budget=data.budget,
+            campaign_image = data.campaign_image,
             start_date=data.start_date,
             end_date=data.end_date
         )
@@ -1438,7 +1439,7 @@ async def update_campaign_endpoint(
         if not business:
             raise HTTPException(status_code=404, detail="Business not found")
         
-        campaign = await campaign_service.update_campaign(campaign_id, business.id, data, db)
+        campaign = await campaign_service.campaign_service.update_campaign(campaign_id, business.id, data, db)
         
         if not campaign:
             raise HTTPException(status_code=404, detail="Campaign not found")
