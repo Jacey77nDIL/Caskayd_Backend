@@ -1445,7 +1445,7 @@ async def update_campaign_endpoint(
             raise HTTPException(status_code=404, detail="Campaign not found")
         
         # Return updated campaign detail
-        campaign_detail = await campaign_service.get_campaign_detail(campaign.id, business.id, db)
+        campaign_detail = await campaign_service.campaign_service.get_campaign_detail(campaign.id, business.id, db)
         
         return campaign_detail
         
