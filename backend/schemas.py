@@ -135,6 +135,13 @@ class CreatorCurrentUserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
+class IndustryResponse(BaseModel):
+    id: int
+    name: str
+    class Config:
+        from_attributes = True
+
 class CreatorProfileUpdate(BaseModel):
     """Schema for updating creator profile details after sign-up"""
     name: Optional[str] = None
@@ -144,6 +151,7 @@ class CreatorProfileUpdate(BaseModel):
     followers_count: Optional[int] = None
     engagement_rate: Optional[float] = None
     niche_ids: Optional[List[int]] = None
+    industry_ids: Optional[List[int]] = None
 
 from pydantic import BaseModel
 from typing import Optional

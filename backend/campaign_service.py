@@ -340,11 +340,8 @@ class CampaignService:
         sent_count = 0
         failed_count = 0
         
-        # Send to each creator
+        # Send to each creator (regardless of status)
         for cc in campaign.campaign_creators:
-            if cc.status != CreatorCampaignStatus.INVITED:
-                continue
-            
             try:
                 # Check if conversation exists
                 existing_conv_result = await db.execute(
@@ -355,7 +352,6 @@ class CampaignService:
                     ))
                 )
                 conversation = existing_conv_result.scalar()
-                
                 # Create conversation if it doesn't exist
                 if not conversation:
                     conversation = Conversation(
@@ -364,7 +360,6 @@ class CampaignService:
                     )
                     db.add(conversation)
                     await db.flush()
-                
                 # Send message
                 message = Message(
                     conversation_id=conversation.id,
@@ -373,10 +368,8 @@ class CampaignService:
                     content=brief_message
                 )
                 db.add(message)
-                
                 conversation.updated_at = func.now()
                 sent_count += 1
-                
             except Exception as e:
                 logger.error(f"Failed to send brief to creator {cc.creator_id}: {e}")
                 failed_count += 1
