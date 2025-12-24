@@ -663,17 +663,13 @@ Campaign: {campaign.title}
         db: AsyncSession,
         status: Optional[str] = None
     ) -> List[dict]:
-        """Get all campaign invitations for a creator"""
-        query = select(CampaignCreator).where(CampaignCreator.creator_id == creator_id)
-        
+        # Fetch campaign invitations for the creator
+        query = select(CampaignCreator).options(
+            selectinload(CampaignCreator.campaign).selectinload(Campaign.business)
+        ).where(CampaignCreator.creator_id == creator_id)
         if status:
             query = query.where(CampaignCreator.status == status)
-        
-        query = query.order_by(desc(CampaignCreator.invited_at))
-        
-        result = await db.execute(
-            query.options(selectinload(CampaignCreator.campaign).selectinload(Campaign.business))
-        )
+        result = await db.execute(query)
         campaign_creators = result.scalars().all()
         
         invitations = []
@@ -684,6 +680,10 @@ Campaign: {campaign.title}
                 'campaign_title': cc.campaign.title,
                 'campaign_description': cc.campaign.description,
                 'campaign_image': cc.campaign.campaign_image,
+                # --- FIX: Add these lines ---
+                'campaign_brief': cc.campaign.brief, 
+                'campaign_brief_file_url': cc.campaign.brief_file_url,
+                # ----------------------------
                 'campaign_budget': cc.campaign.budget,
                 'campaign_start_date': cc.campaign.start_date,
                 'campaign_end_date': cc.campaign.end_date,
