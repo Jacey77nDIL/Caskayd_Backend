@@ -2213,11 +2213,99 @@ async def upload_campaign_brief(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+
+# Improved: Get creator profile with industries, niches, and other details
 @app.get("/creator/profile")
 async def get_creator_profile_with_picture(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db)
 ):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can access this endpoint")
+        creator_result = await db.execute(
+            select(UserCreator).options(selectinload(UserCreator.niches), selectinload(UserCreator.industries)).where(UserCreator.email == email)
+        )
+        creator = creator_result.scalar()
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+        # Compose response with extra fields
+        return {
+            "id": creator.id,
+            "name": creator.name,
+            "bio": creator.bio,
+            "location": creator.location,
+            "profile_picture": getattr(creator, "profile_picture", None),
+            "niches": [{"id": n.id, "name": n.name} for n in getattr(creator, "niches", [])],
+            "industries": [{"id": i.id, "name": i.name} for i in getattr(creator, "industries", [])],
+            # Add other fields as needed
+        }
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching profile: {str(e)}")
+
+
+# New: PUT endpoint for creator profile editing
+@app.put("/profile/creator/edit")
+async def edit_creator_profile(
+    data: schemas.CreatorProfileUpdate,  # You must define this schema with Optional fields
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        if role != "creator":
+            raise HTTPException(status_code=403, detail="Only creators can edit their profile")
+        creator_result = await db.execute(
+            select(UserCreator).options(selectinload(UserCreator.niches), selectinload(UserCreator.industries)).where(UserCreator.email == email)
+        )
+        creator = creator_result.scalar()
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator not found")
+        # Update fields if provided
+        if hasattr(data, "name") and data.name is not None:
+            creator.name = data.name
+        if hasattr(data, "bio") and data.bio is not None:
+            creator.bio = data.bio
+        if hasattr(data, "location") and data.location is not None:
+            creator.location = data.location
+        if hasattr(data, "profile_picture") and data.profile_picture is not None:
+            creator.profile_picture = data.profile_picture
+        if hasattr(data, "niche_ids") and data.niche_ids is not None:
+            creator.niches.clear()
+            for niche_id in data.niche_ids:
+                niche = await db.get(Niche, niche_id)
+                if niche:
+                    creator.niches.append(niche)
+        if hasattr(data, "industry_ids") and data.industry_ids is not None:
+            creator.industries.clear()
+            for industry_id in data.industry_ids:
+                industry = await db.get(Industry, industry_id)
+                if industry:
+                    creator.industries.append(industry)
+        # Add other fields as needed
+        await db.commit()
+        await db.refresh(creator)
+        return {"success": True, "message": "Profile updated", "data": {
+            "id": creator.id,
+            "name": creator.name,
+            "bio": creator.bio,
+            "location": creator.location,
+            "profile_picture": getattr(creator, "profile_picture", None),
+            "niches": [{"id": n.id, "name": n.name} for n in getattr(creator, "niches", [])],
+            "industries": [{"id": i.id, "name": i.name} for i in getattr(creator, "industries", [])],
+        }}
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating profile: {str(e)}")
     """Get current creator's profile with picture"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
