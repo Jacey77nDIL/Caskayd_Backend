@@ -131,16 +131,94 @@ async def login_google(data: schemas.GoogleToken, db: AsyncSession = Depends(get
         raise HTTPException(status_code=401, detail="Google login failed")
     return {"access_token": token}
 
+# Improved Endpoint to Get FULL User Details
 @app.get("/get_current_user")
-async def get_current_user(token: str = Depends(oauth2_scheme)):
+async def get_current_user(
+    token: str = Depends(oauth2_scheme), 
+    db: AsyncSession = Depends(get_db)
+):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
         role = payload.get("role")
-        return {"email": email, "role": role}
+        
+        if role == "creator":
+            result = await db.execute(
+                select(UserCreator)
+                .options(selectinload(UserCreator.niches))
+                .where(UserCreator.email == email)
+            )
+            user = result.scalar()
+            # Return full creator profile structure
+            return {
+                "id": user.id,
+                "email": user.email,
+                "role": "creator",
+                "name": user.name,
+                "bio": user.bio,
+                "category": user.category,
+                "profile_image": user.profile_image,
+                "location": user.location,
+                # Add other fields as needed
+            }
+            
+        elif role == "business":
+            result = await db.execute(
+                select(UserBusiness)
+                .options(selectinload(UserBusiness.industries))
+                .where(UserBusiness.email == email)
+            )
+            user = result.scalar()
+            return {
+                "id": user.id,
+                "email": user.email,
+                "role": "business",
+                "business_name": user.business_name,
+                "business_bio": user.business_bio,
+                "website_url": user.website_url,
+                "socials": user.socials,
+                "category": user.category,
+                "industries": [{"id": i.id, "name": i.name} for i in user.industries]
+            }
+            
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
-    
+
+# New Endpoint to Edit Business Information
+@app.put("/profile/business/edit")
+async def edit_business_profile(
+    data: schemas.BusinessSignUp, # Reusing schema, or create a specific Update schema
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        role = payload.get("role")
+        
+        if role != "business":
+            raise HTTPException(status_code=403, detail="Only businesses can edit this profile")
+            
+        result = await db.execute(select(UserBusiness).where(UserBusiness.email == email))
+        business = result.scalar()
+        
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+            
+        # Update fields
+        # Note: You might want to create a specific Pydantic model where fields are Optional
+        if data.business_name: business.business_name = data.business_name
+        if data.website_url: business.website_url = data.website_url
+        if data.business_bio: business.business_bio = data.business_bio
+        if data.socials: business.socials = data.socials
+        
+        await db.commit()
+        await db.refresh(business)
+        
+        return {"success": True, "message": "Business profile updated", "data": business}
+
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 # --- In main.py, inside @app.post("/auth/facebook") ---
 
