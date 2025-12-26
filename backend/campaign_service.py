@@ -384,6 +384,100 @@ class CampaignService:
         }
     
     @staticmethod
+    async def send_text_brief_to_new_creators(
+        campaign_id: int,
+        business_id: int,
+        creator_ids: List[int],
+        db: AsyncSession
+    ) -> dict:
+        """Send campaign text brief to specific newly added creators"""
+        # Get campaign
+        campaign_result = await db.execute(
+            select(Campaign)
+            .options(selectinload(Campaign.business))
+            .where(and_(
+                Campaign.id == campaign_id,
+                Campaign.business_id == business_id
+            ))
+        )
+        campaign = campaign_result.scalar()
+        
+        if not campaign:
+            return {"success": False, "message": "Campaign not found"}
+            
+        if not campaign.brief:
+             return {"success": False, "message": "Campaign has no brief"}
+        
+        sent_count = 0
+        failed_count = 0
+        
+        # Build brief message
+        brief_message = f"""
+🎯 Campaign Brief: {campaign.title}
+
+{campaign.description}
+
+📋 BRIEF:
+{campaign.brief}
+"""
+        
+        if campaign.campaign_image:
+            brief_message += f"\n🖼️ Campaign Image: {campaign.campaign_image}"
+        
+        if campaign.budget:
+            brief_message += f"\n💰 Budget: ${campaign.budget:,.2f}"
+        
+        if campaign.start_date and campaign.end_date:
+            brief_message += f"\n📅 Campaign Period: {campaign.start_date.strftime('%Y-%m-%d')} to {campaign.end_date.strftime('%Y-%m-%d')}"
+            
+        # Send to each specified creator
+        for creator_id in creator_ids:
+            try:
+                # Check if conversation exists
+                existing_conv_result = await db.execute(
+                    select(Conversation).where(and_(
+                        Conversation.creator_id == creator_id,
+                        Conversation.business_id == business_id,
+                        Conversation.is_active == True
+                    ))
+                )
+                conversation = existing_conv_result.scalar()
+                
+                # Create conversation if it doesn't exist
+                if not conversation:
+                    conversation = Conversation(
+                        creator_id=creator_id,
+                        business_id=business_id
+                    )
+                    db.add(conversation)
+                    await db.flush()
+                
+                # Send message
+                message = Message(
+                    conversation_id=conversation.id,
+                    sender_type="business",
+                    sender_id=business_id,
+                    content=brief_message
+                )
+                db.add(message)
+                
+                conversation.updated_at = func.now()
+                sent_count += 1
+                
+            except Exception as e:
+                logger.error(f"Failed to send brief to creator {creator_id}: {e}")
+                failed_count += 1
+        
+        await db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Brief sent to {sent_count} creator(s)",
+            "sent_count": sent_count,
+            "failed_count": failed_count
+        }
+
+    @staticmethod
     async def send_brief_file_to_creators(
         campaign_id: int,
         business_id: int,
