@@ -1525,6 +1525,13 @@ async def update_campaign_endpoint(
         # Return updated campaign detail
         campaign_detail = await campaign_service.campaign_service.get_campaign_detail(campaign.id, business.id, db)
         
+        # Check if brief was updated and send to creators
+        if data.brief_file_url:
+            file_name = data.brief_file_url.split('/')[-1] if '/' in data.brief_file_url else 'campaign_brief'
+            await campaign_service.campaign_service.send_brief_file_to_creators(
+                campaign.id, business.id, data.brief_file_url, file_name, db
+            )
+            
         return campaign_detail
         
     except JWTError:
@@ -1569,6 +1576,14 @@ async def add_creators_to_campaign_endpoint(
         campaign = campaign_result.scalar()
         
         brief_sent_count = 0
+        
+        # Send text brief if it exists
+        if campaign and campaign.brief:
+             send_text_result = await campaign_service.campaign_service.send_text_brief_to_new_creators(
+                campaign_id, business.id, [c.creator_id for c in added_creators], db
+            )
+             brief_sent_count += send_text_result.get("sent_count", 0)
+
         if campaign and campaign.brief_file_url:
             # Extract filename from URL or use generic name
             file_name = campaign.brief_file_url.split('/')[-1] if '/' in campaign.brief_file_url else 'campaign_brief'
@@ -1576,7 +1591,7 @@ async def add_creators_to_campaign_endpoint(
                 campaign_id, business.id, [c.creator_id for c in added_creators], 
                 campaign.brief_file_url, file_name, db
             )
-            brief_sent_count = send_result.get("sent_count", 0)
+            brief_sent_count += send_result.get("sent_count", 0)
         
         return {
             "success": True,
