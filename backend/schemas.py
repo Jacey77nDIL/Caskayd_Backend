@@ -49,7 +49,9 @@ class MessageResponse(BaseModel):
     conversation_id: int
     sender_type: str
     sender_id: int
-    content: str
+    content: Optional[str] = None
+    file_url: Optional[str] = None
+    file_type: Optional[str] = None
     created_at: datetime
     is_read: bool
     
