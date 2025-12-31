@@ -339,6 +339,7 @@ class CampaignService:
         
         sent_count = 0
         failed_count = 0
+        sent_messages = []
         
         # Send to each creator (regardless of status)
         for cc in campaign.campaign_creators:
@@ -368,6 +369,7 @@ class CampaignService:
                     content=brief_message
                 )
                 db.add(message)
+                sent_messages.append(message)
                 conversation.updated_at = func.now()
                 sent_count += 1
             except Exception as e:
@@ -376,11 +378,16 @@ class CampaignService:
         
         await db.commit()
         
+        # Refresh messages to get IDs and timestamps
+        for msg in sent_messages:
+            await db.refresh(msg)
+        
         return {
             "success": True,
             "message": f"Brief sent to {sent_count} creator(s)",
             "sent_count": sent_count,
-            "failed_count": failed_count
+            "failed_count": failed_count,
+            "messages": sent_messages
         }
     
     @staticmethod
@@ -410,6 +417,7 @@ class CampaignService:
         
         sent_count = 0
         failed_count = 0
+        sent_messages = []
         
         # Build brief message
         brief_message = f"""
@@ -460,6 +468,7 @@ class CampaignService:
                     content=brief_message
                 )
                 db.add(message)
+                sent_messages.append(message)
                 
                 conversation.updated_at = func.now()
                 sent_count += 1
@@ -470,11 +479,16 @@ class CampaignService:
         
         await db.commit()
         
+        # Refresh messages
+        for msg in sent_messages:
+            await db.refresh(msg)
+        
         return {
             "success": True,
             "message": f"Brief sent to {sent_count} creator(s)",
             "sent_count": sent_count,
-            "failed_count": failed_count
+            "failed_count": failed_count,
+            "messages": sent_messages
         }
 
     @staticmethod
@@ -503,6 +517,7 @@ class CampaignService:
         
         sent_count = 0
         failed_count = 0
+        sent_messages = []
         
         # Build brief message with file link
         brief_message = f"""
@@ -523,9 +538,9 @@ Campaign: {campaign.title}
         if campaign.start_date and campaign.end_date:
             brief_message += f"\n📅 Period: {campaign.start_date.strftime('%Y-%m-%d')} to {campaign.end_date.strftime('%Y-%m-%d')}"
         
-        # Send to each creator that is invited
+        # Send to each creator that is invited or accepted (not declined/removed)
         for cc in campaign.campaign_creators:
-            if cc.status != CreatorCampaignStatus.INVITED:
+            if cc.status not in [CreatorCampaignStatus.INVITED, CreatorCampaignStatus.ACCEPTED]:
                 continue
             
             try:
@@ -558,6 +573,7 @@ Campaign: {campaign.title}
                     file_type=file_name.split('.')[-1].upper() if '.' in file_name else 'FILE'
                 )
                 db.add(message)
+                sent_messages.append(message)
                 
                 conversation.updated_at = func.now()
                 sent_count += 1
@@ -568,11 +584,16 @@ Campaign: {campaign.title}
         
         await db.commit()
         
+        # Refresh messages
+        for msg in sent_messages:
+            await db.refresh(msg)
+        
         return {
             "success": True,
             "message": f"Brief sent to {sent_count} creator(s)",
             "sent_count": sent_count,
-            "failed_count": failed_count
+            "failed_count": failed_count,
+            "messages": sent_messages
         }
     
     @staticmethod
@@ -601,6 +622,7 @@ Campaign: {campaign.title}
         
         sent_count = 0
         failed_count = 0
+        sent_messages = []
         
         # Build brief message with file link
         brief_message = f"""
@@ -653,6 +675,7 @@ Campaign: {campaign.title}
                     file_type=file_name.split('.')[-1].upper() if '.' in file_name else 'FILE'
                 )
                 db.add(message)
+                sent_messages.append(message)
                 
                 conversation.updated_at = func.now()
                 sent_count += 1
@@ -663,11 +686,16 @@ Campaign: {campaign.title}
         
         await db.commit()
         
+        # Refresh messages
+        for msg in sent_messages:
+            await db.refresh(msg)
+        
         return {
             "success": True,
             "message": f"Brief sent to {sent_count} creator(s)",
             "sent_count": sent_count,
-            "failed_count": failed_count
+            "failed_count": failed_count,
+            "messages": sent_messages
         }
     
     @staticmethod

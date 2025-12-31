@@ -1649,7 +1649,7 @@ async def remove_creator_from_campaign_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@app.post("/campaigns/{campaign_id}/send-brief")
+@app.post("/campaigns/{campaign_id}/send-brief", response_model=schemas.BriefSendResponse)
 async def send_campaign_brief_endpoint(
     campaign_id: int,
     data: schemas.CampaignBriefSend,
@@ -2321,47 +2321,3 @@ async def edit_creator_profile(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Error updating profile: {str(e)}")
-    """Get current creator's profile with picture"""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email = payload.get("sub")
-        role = payload.get("role")
-        
-        if role != "creator":
-            raise HTTPException(status_code=403, detail="Only creators can view their profile")
-        
-        creator_result = await db.execute(
-            select(UserCreator)
-            .options(selectinload(UserCreator.niches))
-            .where(UserCreator.email == email)
-        )
-        creator = creator_result.scalar()
-        
-        if not creator:
-            raise HTTPException(status_code=404, detail="Creator not found")
-        
-        return {
-            "success": True,
-            "data": {
-                "id": creator.id,
-                "name": creator.name,
-                "email": creator.email,
-                "bio": creator.bio,
-                "location": creator.location,
-                "profile_picture": creator.profile_image,
-                "followers_count": creator.followers_count,
-                "engagement_rate": creator.engagement_rate,
-                "niches": [{"id": niche.id, "name": niche.name} for niche in creator.niches],
-                "created_at": creator.created_at.isoformat() if creator.created_at else None
-            },
-            "message": "Creator profile retrieved successfully"
-        }
-        
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-

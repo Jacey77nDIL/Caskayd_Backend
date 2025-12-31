@@ -118,7 +118,7 @@ campaign_image: Optional[str] = None  # Added field
 2. **update_campaign()** - Now handles campaign_image updates
 3. **get_campaign_detail()** - Now includes campaign_image in response
 4. **get_creator_campaign_invitations()** - Now includes campaign_image in invitation data
-5. **send_brief_to_creators()** - Now includes campaign image URL in brief message sent to creators
+5. **send_brief_to_creators()** - Now includes campaign image URL in brief message sent to creators. Returns `BriefSendResponse` containing the actual sent messages.
 
 #### Campaign Invitation Enhancement
 When campaign invitations are sent to creators with the brief, the campaign image is now included:
