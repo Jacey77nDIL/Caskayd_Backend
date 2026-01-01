@@ -243,3 +243,33 @@ POST /campaigns/{campaign_id}/send-brief
 - Campaign image is optional and nullable
 - Profile updates are partial (only specified fields are updated)
 - Niches can be completely replaced when niche_ids are provided
+
+---
+
+## 4. Paystack Split Payments (10% Commission)
+
+### Files Modified
+- **models.py** - Added `subaccount_code` to `BankAccount` model
+- **paystack_service.py** - Added `create_subaccount` method and updated `initialize_transaction`
+- **main.py** - Updated `submit_account_details` and `initialize_payment` endpoints
+
+### Changes Made
+
+#### Database Schema Update
+```python
+subaccount_code = Column(String, nullable=True) # Paystack subaccount code (ACCT_...)
+```
+Added to `BankAccount` model.
+
+#### Service Layer Updates
+1. **create_subaccount()** - Creates a Paystack subaccount with a 10% percentage charge for the platform.
+2. **initialize_transaction()** - Now accepts `subaccount` parameter to enable split payments.
+
+#### Endpoint Updates
+1. **submit_account_details** - Now automatically creates a Paystack subaccount (for split payments) and a Transfer Recipient (for payouts) when a creator submits their bank details.
+2. **initialize_payment** - Checks if the payment is for a creator (via `creator_id` in metadata). If so, it uses the creator's `subaccount_code` to initialize a split payment where the platform takes 10%.
+
+### How it Works
+1. **Creator Onboarding**: When a creator saves their bank details, a Paystack Subaccount is created with `percentage_charge=10`.
+2. **Payment**: When a business pays a creator (e.g. for a campaign), the system looks up the creator's subaccount code.
+3. **Split**: The payment is initialized with this subaccount code. Paystack automatically splits the payment: 10% to the platform, 90% to the creator (minus Paystack fees).
