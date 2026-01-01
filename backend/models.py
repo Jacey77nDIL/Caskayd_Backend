@@ -336,6 +336,7 @@ class BankAccount(Base):
     bank_code = Column(String, nullable=False)
     bank_name = Column(String, nullable=False)
     recipient_code = Column(String, nullable=True)  # Paystack recipient code (RCP_...)
+    subaccount_code = Column(String, nullable=True) # Paystack subaccount code (ACCT_...)
     currency = Column(String, default="NGN")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())

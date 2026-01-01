@@ -30,7 +30,9 @@ class PaystackService:
         currency: str = "NGN",
         reference: Optional[str] = None,
         callback_url: Optional[str] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        subaccount: Optional[str] = None, # Add subaccount parameter
+        transaction_charge: Optional[int] = None # Optional flat fee override
     ) -> Dict[str, Any]:
         """
         Initialize a payment transaction
@@ -42,6 +44,8 @@ class PaystackService:
             reference: Unique transaction reference
             callback_url: URL to redirect after payment
             metadata: Additional data to attach to transaction
+            subaccount: Subaccount code for split payment (e.g., ACCT_xxxx)
+            transaction_charge: Flat fee to charge main account (in kobo)
         """
         try:
             payload = {
@@ -56,6 +60,10 @@ class PaystackService:
                 payload["callback_url"] = callback_url
             if metadata:
                 payload["metadata"] = metadata
+            if subaccount:
+                payload["subaccount"] = subaccount
+            if transaction_charge is not None:
+                payload["transaction_charge"] = transaction_charge
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -160,6 +168,36 @@ class PaystackService:
                 return data["data"]
         except Exception as e:
             logger.error(f"Paystack resolve_account error: {str(e)}")
+            raise
+
+    async def create_subaccount(
+        self,
+        business_name: str,
+        bank_code: str,
+        account_number: str,
+        percentage_charge: float = 10.0  # Default 10% to platform
+    ) -> str:
+        """Create a subaccount for split payments"""
+        try:
+            payload = {
+                "business_name": business_name,
+                "settlement_bank": bank_code,
+                "account_number": account_number,
+                "percentage_charge": percentage_charge
+            }
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.base_url}/subaccount",
+                    json=payload,
+                    headers=self._get_headers(),
+                    timeout=30.0
+                )
+                data = response.json()
+                if response.status_code not in [200, 201]:
+                    raise Exception(f"Failed to create subaccount: {data.get('message')}")
+                return data["data"]["subaccount_code"]
+        except Exception as e:
+            logger.error(f"Paystack create_subaccount error: {str(e)}")
             raise
 
     async def create_transfer_recipient(

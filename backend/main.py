@@ -1064,6 +1064,18 @@ async def initialize_payment(
             "purpose": payment_data.purpose or "general"
         })
         
+        # Check for split payment (if paying a creator)
+        subaccount_code = None
+        if "creator_id" in metadata:
+            creator_id = metadata["creator_id"]
+            # Fetch creator's bank account
+            bank_result = await db.execute(
+                select(models.BankAccount).where(models.BankAccount.user_id == creator_id)
+            )
+            bank_account = bank_result.scalar_one_or_none()
+            if bank_account and bank_account.subaccount_code:
+                subaccount_code = bank_account.subaccount_code
+        
         # Initialize payment with Paystack
         result = await paystack_service.initialize_transaction(
             email=email,
@@ -1071,7 +1083,8 @@ async def initialize_payment(
             currency=payment_data.currency,
             reference=reference,
             callback_url=payment_data.callback_url,
-            metadata=metadata
+            metadata=metadata,
+            subaccount=subaccount_code
         )
         
         # Save transaction to database
@@ -1649,7 +1662,7 @@ async def remove_creator_from_campaign_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@app.post("/campaigns/{campaign_id}/send-brief")
+@app.post("/campaigns/{campaign_id}/send-brief", response_model=schemas.BriefSendResponse)
 async def send_campaign_brief_endpoint(
     campaign_id: int,
     data: schemas.CampaignBriefSend,
@@ -1938,6 +1951,29 @@ async def submit_account_details(
         banks = await paystack_service.get_banks()
         bank_name = next((b["name"] for b in banks if b["code"] == bank_code), "Unknown Bank")
 
+        # Create Paystack Subaccount (for split payments - 10% to platform)
+        try:
+            subaccount_code = await paystack_service.create_subaccount(
+                business_name=account_name,
+                bank_code=bank_code,
+                account_number=account_number,
+                percentage_charge=10.0
+            )
+        except Exception as e:
+            logging.error(f"Failed to create subaccount: {e}")
+            subaccount_code = None
+
+        # Create Paystack Recipient (for payouts)
+        try:
+            recipient_code = await paystack_service.create_transfer_recipient(
+                name=account_name,
+                account_number=account_number,
+                bank_code=bank_code
+            )
+        except Exception as e:
+            logging.error(f"Failed to create recipient: {e}")
+            recipient_code = None
+
         # Check if creator already has account
         result = await db.execute(
             select(models.BankAccount).where(models.BankAccount.user_id == user.id)
@@ -1950,6 +1986,10 @@ async def submit_account_details(
             existing_account.account_name = account_name
             existing_account.bank_code = bank_code
             existing_account.bank_name = bank_name
+            if subaccount_code:
+                existing_account.subaccount_code = subaccount_code
+            if recipient_code:
+                existing_account.recipient_code = recipient_code
             db.add(existing_account)
         else:
             new_account = models.BankAccount(
@@ -1958,7 +1998,8 @@ async def submit_account_details(
                 account_name=account_name,
                 bank_code=bank_code,
                 bank_name=bank_name,
-                recipient_code=""
+                recipient_code=recipient_code,
+                subaccount_code=subaccount_code
             )
             db.add(new_account)
 
@@ -2321,47 +2362,3 @@ async def edit_creator_profile(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Error updating profile: {str(e)}")
-    """Get current creator's profile with picture"""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email = payload.get("sub")
-        role = payload.get("role")
-        
-        if role != "creator":
-            raise HTTPException(status_code=403, detail="Only creators can view their profile")
-        
-        creator_result = await db.execute(
-            select(UserCreator)
-            .options(selectinload(UserCreator.niches))
-            .where(UserCreator.email == email)
-        )
-        creator = creator_result.scalar()
-        
-        if not creator:
-            raise HTTPException(status_code=404, detail="Creator not found")
-        
-        return {
-            "success": True,
-            "data": {
-                "id": creator.id,
-                "name": creator.name,
-                "email": creator.email,
-                "bio": creator.bio,
-                "location": creator.location,
-                "profile_picture": creator.profile_image,
-                "followers_count": creator.followers_count,
-                "engagement_rate": creator.engagement_rate,
-                "niches": [{"id": niche.id, "name": niche.name} for niche in creator.niches],
-                "created_at": creator.created_at.isoformat() if creator.created_at else None
-            },
-            "message": "Creator profile retrieved successfully"
-        }
-        
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
