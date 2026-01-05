@@ -288,7 +288,7 @@ async def create_conversation(
         email = payload.get("sub")
         role = payload.get("role")
         
-        conversation_id = await ChatService.ChatService.create_conversation(email, role, data, db)
+        conversation_id = await ChatService.create_conversation(email, role, data, db)
         if not conversation_id:
             raise HTTPException(status_code=400, detail="Failed to create conversation")
             
@@ -308,7 +308,7 @@ async def get_conversations(
         email = payload.get("sub")
         role = payload.get("role")
         
-        conversations = await ChatService.ChatService.get_conversations(email, role, db)
+        conversations = await ChatService.get_conversations(email, role, db)
         return conversations
         
     except JWTError:
@@ -326,7 +326,7 @@ async def get_conversation_detail(
         email = payload.get("sub")
         role = payload.get("role")
         
-        conversation = await ChatService.ChatService.get_conversation_detail(conversation_id, email, role, db)
+        conversation = await ChatService.get_conversation_detail(conversation_id, email, role, db)
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
             

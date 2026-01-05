@@ -131,7 +131,7 @@ class ChatService:
             unread_result = await db.execute(unread_query)
             unread_count = unread_result.scalar() or 0
             
-            conversation_responses.append(models.ConversationResponse(
+            conversation_responses.append(schemas.ConversationResponse(
                 id=conv.id,
                 creator_id=conv.creator_id,
                 business_id=conv.business_id,
